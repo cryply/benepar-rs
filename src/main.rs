@@ -41,6 +41,10 @@ struct Args {
     /// antecedent in brackets
     #[arg(long)]
     canonical: bool,
+    /// Keep hyphenated words whole ("owner-controlled") instead of
+    /// splitting them at the hyphen as the treebank does
+    #[arg(long)]
+    keep_hyphens: bool,
     /// Text to parse; read from stdin when missing
     text: Option<String>,
 }
@@ -142,7 +146,7 @@ fn main() -> Result<()> {
         }
     };
     let mut parser = model::Parser::load(&args.model).context("loading model")?;
-    let sents = text::sentences(&text);
+    let sents = if args.keep_hyphens { text::sentences_keep_hyphens(&text) } else { text::sentences(&text) };
     let parses = parser.parse_sentences(&sents, args.k, args.label_variants, args.threads)?;
     if args.mentions || args.canonical {
         let mut all = Vec::new();

@@ -89,7 +89,12 @@ weights are not part of this repository.
 ## How it works
 
 - Text is split into sentences and treebank-style words by simple rules
-  (`src/text.rs`); the Python package uses spaCy for this step.
+  (`src/text.rs`); the Python package uses spaCy for this step. Hyphenated
+  words are split at the hyphen (`owner - controlled`, tagged `NN HYPH
+  VBN`), as in the revised treebank the models were trained on; a word
+  kept whole gets one leaf and usually a wrong tag. Words with a prefix
+  such as `self-` or `non-`, numbers and URLs stay whole. `--keep-hyphens`
+  turns the splitting off.
 - Words are re-tokenized into T5 subwords. The tokenizer is built from
   `spiece.model` directly (`src/spm.rs`).
 - T5 runs as encoder plus decoder; the decoder states at the last

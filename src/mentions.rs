@@ -229,7 +229,7 @@ fn name_mention(words: &[(&str, &str)], start: usize, sentence: usize, subject: 
         sentence,
         start,
         end: start + words.len(),
-        text: text.join(" "),
+        text: join_words(&text),
         kind: Kind::Name,
         head: text.last().copied().unwrap_or("").to_string(),
         number: if plural { Number::Plural } else { Number::Singular },
@@ -307,7 +307,7 @@ fn base_np(t: &Node, start: usize, sentence: usize, subject: bool) -> Option<Men
         sentence,
         start,
         end: start + core.len(),
-        text: text.join(" "),
+        text: join_words(&text),
         kind: Kind::Nominal,
         head: head.word.to_lowercase(),
         number,
@@ -426,6 +426,13 @@ pub fn resolve(all: &mut [Mention]) {
     }
 }
 
+// Words joined by spaces, except around a hyphen that was split out of a
+// word ("owner - controlled" is printed as "owner-controlled").
+fn join_words<S: AsRef<str>>(words: &[S]) -> String {
+    let words: Vec<&str> = words.iter().map(|w| w.as_ref()).collect();
+    words.join(" ").replace(" - ", "-")
+}
+
 // Words of every sentence with each resolved pronoun followed by its best
 // antecedent in brackets: "she [Alice] would call him [Bob]".
 pub fn annotate(sentences: &[Vec<String>], all: &[Mention]) -> Vec<String> {
@@ -439,7 +446,7 @@ pub fn annotate(sentences: &[Vec<String>], all: &[Mention]) -> Vec<String> {
                 }
             }
         }
-        out.push(pieces.join(" "));
+        out.push(join_words(&pieces));
     }
     out
 }
