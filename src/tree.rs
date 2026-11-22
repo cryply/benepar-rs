@@ -52,6 +52,24 @@ impl Node {
     }
 }
 
+impl Node {
+    pub fn to_json(&self) -> serde_json::Value {
+        match self {
+            Node::Leaf(tag, word) => serde_json::json!({"tag": tag, "word": word}),
+            Node::Phrase(_, kids) => {
+                let kids: Vec<_> = kids.iter().map(Node::to_json).collect();
+                let labels = self.labels();
+                // Expand a collapsed unary chain into nested nodes.
+                let mut node = serde_json::json!({"label": labels.last().copied().unwrap_or(""), "children": kids});
+                for l in labels.iter().rev().skip(1) {
+                    node = serde_json::json!({"label": l, "children": [node]});
+                }
+                node
+            }
+        }
+    }
+}
+
 fn escape(word: &str) -> String {
     match word {
         "(" => "-LRB-".into(),
@@ -91,6 +109,15 @@ impl fmt::Display for Node {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn json_expands_unary_chain() {
+        let t = Node::Phrase("S::VP".into(), vec![Node::leaf("VB", "Go")]);
+        assert_eq!(
+            t.to_json().to_string(),
+            r#"{"children":[{"children":[{"tag":"VB","word":"Go"}],"label":"VP"}],"label":"S"}"#
+        );
+    }
 
     #[test]
     fn unary_chain_is_expanded() {

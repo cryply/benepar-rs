@@ -31,6 +31,26 @@ best labels.
 $ benepar-rs --model ./benepar_en3 -k 3 --scores "I saw the man with the telescope."
 ```
 
+## JSON output and library use
+
+`--json` prints one JSON object per sentence with the words, the predicted
+POS tags and the trees, each as a bracketed string and as nested
+`{"label", "children"}` / `{"tag", "word"}` objects.
+
+The crate is also a library:
+
+```rust
+use benepar_rs::Parser;
+
+let mut parser = Parser::load(std::path::Path::new("benepar_en3"))?;
+for parse in parser.parse_text("The time for action is now.", 1, 1)? {
+    println!("{}", parse.trees[0].1);
+}
+```
+
+`parse_sentence` takes an already tokenized `Sentence`; `Parse::to_json`
+gives the same object the CLI prints.
+
 ## Model files
 
 Get `benepar_en3` from the benepar model index
