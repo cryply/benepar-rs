@@ -173,8 +173,11 @@ impl Parser {
         let cfg: Value = serde_json::from_str(&cfg_text)?;
         let b = &cfg["benepar"];
         let h = &b["hparams"];
-        if h["pretrained_model"].as_str() != Some("t5-small") || h["use_encoder"] != true {
-            bail!("only the benepar_en3 layout (t5-small + encoder) is supported");
+        // benepar_en3 uses t5-small, benepar_en3_large t5-large; all sizes
+        // below come from config.json.
+        let pretrained = h["pretrained_model"].as_str().unwrap_or("");
+        if !pretrained.starts_with("t5-") || h["use_encoder"] != true {
+            bail!("only the benepar_en3 layouts (T5 + encoder) are supported, got {pretrained:?}");
         }
         let d_model = hp(h, "d_model")?;
         let (n_head, d_kv, d_ff) = (hp(h, "num_heads")?, hp(h, "d_kv")?, hp(h, "d_ff")?);
