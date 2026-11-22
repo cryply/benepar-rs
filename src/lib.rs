@@ -9,6 +9,7 @@
 //! ```
 
 pub mod chart;
+pub mod mentions;
 pub mod model;
 #[allow(dead_code)]
 pub mod spm;
