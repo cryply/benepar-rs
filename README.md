@@ -107,16 +107,24 @@ this measures the model port, not the tokenizer.
 
 ```
 $ benepar-rs --model ./benepar_en3 --eval 23.auto.clean
+$ benepar-rs --model ./benepar_en3 --eval /path/to/LDC2015T13/data/penntree/23 --threads 8
 ```
 
-On WSJ section 23 as shipped in the benepar repository
-(`data/23.auto.clean`, 2416 sentences, classic PTB tokenization and
-annotation) this port gets F1 93.82, exact match 40.89%, POS accuracy
-95.80%, at about 0.09 s per sentence on two CPU cores. The benepar authors
-report F1 95.40 for benepar_en3 on the revised WSJ test set (LDC2015T13),
-which uses different tokenization and annotation guidelines, so the two
-numbers are not directly comparable; the gap is in line with that
-difference.
+`--eval` takes a file or a directory of `.mrg`/`.tree` files, as shipped by
+LDC. Trees are cleaned the way benepar's corpus scripts do it: empty
+elements (`-NONE-`) and the constituents they leave empty are removed,
+function tags and indices are stripped (`NP-SBJ-2` becomes `NP`). The
+treebank itself is licensed by LDC and is not part of this repository.
+
+On the revised WSJ test set (LDC2015T13, section 23, 2416 sentences), the
+set the benepar authors report on, this port gets F1 95.28 against their
+95.40 for benepar_en3, with exact match 52.36% and POS accuracy 97.80%,
+about 0.05 s per sentence on 8 threads. The remaining 0.1 is within the
+difference between this scorer and EVALB and the spacing guessed from
+tokenized trees.
+
+On `data/23.auto.clean` from the benepar repository (classic PTB
+annotation, which the model was not trained on) it gets F1 93.82.
 
 ## Build
 

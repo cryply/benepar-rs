@@ -16,6 +16,55 @@ pub fn parse(s: &str) -> Result<Node> {
     Ok(node)
 }
 
+// Parse every tree in a text: one per line as in the benepar files, or
+// spread over several lines as in the LDC .mrg and .tree files.
+pub fn parse_many(s: &str) -> Result<Vec<Node>> {
+    let chars: Vec<char> = s.chars().collect();
+    let mut pos = 0;
+    let mut out = Vec::new();
+    loop {
+        skip_ws(&chars, &mut pos);
+        if pos >= chars.len() {
+            break;
+        }
+        out.push(parse_node(&chars, &mut pos)?);
+    }
+    Ok(out)
+}
+
+// Function tags and coindexation removed, as benepar's strip_functional.py
+// does: NP-SBJ-2 -> NP, NP=1 -> NP. Labels like -NONE- and -LRB- stay.
+pub fn strip_label(label: &str) -> String {
+    if label.len() > 1 && label.starts_with('-') && label.ends_with('-') {
+        return label.to_string();
+    }
+    let l = label.split('-').next().unwrap_or("");
+    l.split('=').next().unwrap_or("").to_string()
+}
+
+// Treebank tree as it is in the LDC files to the form used for scoring:
+// empty elements (-NONE-) dropped, constituents left empty by that dropped
+// too, function tags and indices stripped from every label.
+pub fn clean(t: &Node) -> Option<Node> {
+    match t {
+        Node::Leaf(tag, word) => {
+            if tag == "-NONE-" {
+                None
+            } else {
+                Some(Node::Leaf(strip_label(tag), word.clone()))
+            }
+        }
+        Node::Phrase(label, kids) => {
+            let kids: Vec<Node> = kids.iter().filter_map(clean).collect();
+            if kids.is_empty() {
+                None
+            } else {
+                Some(Node::Phrase(strip_label(label), kids))
+            }
+        }
+    }
+}
+
 fn skip_ws(chars: &[char], pos: &mut usize) {
     while *pos < chars.len() && chars[*pos].is_whitespace() {
         *pos += 1;
@@ -106,10 +155,12 @@ pub fn guess_spaces(words: &[String]) -> Vec<bool> {
             || matches!(next, "'re" | "'ve" | "'ll" | "'d" | "'m" | "'")
             || (next == "\"" && open_quote);
         let no_space_after = matches!(w, "(" | "[" | "{" | "$" | "#") || (w == "\"" && !open_quote);
+        // revised treebank splits hyphenated words: "well - known" was "well-known"
+        let hyphen_link = (w == "-" && i > 0 && i + 1 < n) || (next == "-" && i + 2 < n);
         if w == "\"" {
             open_quote = !open_quote;
         }
-        out[i] = !(no_space_before_next || no_space_after);
+        out[i] = !(no_space_before_next || no_space_after || hyphen_link);
     }
     if n > 0 {
         out[n - 1] = false;
@@ -274,6 +325,28 @@ mod tests {
         c.add(&gold, &worse);
         assert_eq!((c.matched, c.gold, c.pred), (3, 4, 5));
         assert!(c.f1() > 66.0 && c.f1() < 67.0);
+    }
+
+    #[test]
+    fn revised_format_is_cleaned() {
+        let raw = "( (S (NP-SBJ-2 (PRP it)) (VP (VBD was) (S (NP-SBJ (-NONE- *-2))
+            (ADJP-PRD (JJ well) (HYPH -) (VBN known)))) (. .)) )\n( (FRAG (NP (NN Test)) (. .)) )";
+        let trees = parse_many(raw).unwrap();
+        assert_eq!(trees.len(), 2);
+        let t = clean(&trees[0]).unwrap();
+        assert_eq!(
+            t.to_string(),
+            "(S (NP (PRP it)) (VP (VBD was) (S (ADJP (JJ well) (HYPH -) (VBN known)))) (. .))"
+        );
+        assert_eq!(strip_label("-LRB-"), "-LRB-");
+        assert_eq!(strip_label("NP=3"), "NP");
+        assert_eq!(strip_label("SBAR-TMP"), "SBAR");
+    }
+
+    #[test]
+    fn hyphen_tokens_get_no_spaces() {
+        let w: Vec<String> = ["a", "well", "-", "known", "fact"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(guess_spaces(&w), [true, false, false, true, false]);
     }
 
     #[test]
