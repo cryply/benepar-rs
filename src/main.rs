@@ -20,8 +20,8 @@ struct Args {
     /// bracketing (attachment), more also varies the labels
     #[arg(long, default_value_t = 1)]
     label_variants: usize,
-    /// Score the parser on a treebank file (one bracketed tree per line)
-    /// and print EVALB-style precision, recall and F1 instead of parsing text
+    /// Score the parser on a treebank file or a directory of .mrg/.tree
+    /// files and print EVALB-style precision, recall and F1
     #[arg(long, value_name = "FILE")]
     eval: Option<PathBuf>,
     /// With --eval: stop after this many sentences
@@ -46,14 +46,33 @@ struct Args {
 }
 
 fn evaluate(parser: &mut model::Parser, file: &std::path::Path, limit: Option<usize>, threads: usize) -> Result<()> {
-    let data = std::fs::read_to_string(file).with_context(|| format!("reading {}", file.display()))?;
+    // A file with trees, or a directory of .mrg/.tree files (an LDC
+    // section such as penntree/23), read in name order.
+    let mut paths = Vec::new();
+    if file.is_dir() {
+        for e in std::fs::read_dir(file)? {
+            let p = e?.path();
+            if matches!(p.extension().and_then(|x| x.to_str()), Some("mrg" | "tree")) {
+                paths.push(p);
+            }
+        }
+        paths.sort();
+    } else {
+        paths.push(file.to_path_buf());
+    }
+    let mut raw = Vec::new();
+    for p in &paths {
+        let data = std::fs::read_to_string(p).with_context(|| format!("reading {}", p.display()))?;
+        let trees = treebank::parse_many(&data).with_context(|| format!("parsing {}", p.display()))?;
+        raw.extend(trees);
+    }
     let mut golds = Vec::new();
     let mut sents = Vec::new();
-    for (n, line) in data.lines().filter(|l| !l.trim().is_empty()).enumerate() {
+    for (n, tree) in raw.iter().enumerate() {
         if limit.is_some_and(|l| n >= l) {
             break;
         }
-        let gold = treebank::parse(line).with_context(|| format!("tree on line {}", n + 1))?;
+        let Some(gold) = treebank::clean(tree) else { continue };
         let words: Vec<String> = treebank::leaves(&gold)
             .iter()
             .map(|(_, w)| treebank::unescape(w))
