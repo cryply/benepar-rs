@@ -5,7 +5,7 @@
 // spaCy; this is a rule-based replacement that follows the same conventions
 // for the common cases: punctuation split off, clitics such as 's and n't
 // split from their host, abbreviations and numbers kept whole, quotes
-// normalized.
+// normalized, hyphenated words split at the hyphen.
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Sentence {
@@ -30,6 +30,14 @@ const SPLITS: [(&str, &str, &str); 4] = [
     ("gonna", "gon", "na"),
     ("wanna", "wan", "na"),
     ("gotta", "got", "ta"),
+];
+
+// A hyphenated word whose first part is one of these stays whole, as in
+// the revised treebank: splitting would leave a piece that is not a word.
+const HYPHEN_PREFIXES: [&str; 22] = [
+    "anti", "co", "counter", "cross", "ex", "extra", "inter", "intra", "mid",
+    "multi", "neo", "non", "post", "pre", "pro", "pseudo", "quasi", "re",
+    "self", "semi", "sub", "ultra",
 ];
 
 // Same mapping benepar applies to spaCy tokens before parsing.
@@ -173,7 +181,57 @@ fn chunk_ends_sentence(words: &[String]) -> bool {
     i > 0 && is_terminal(&words[i - 1]) && !is_abbreviation(&words[i - 1])
 }
 
+// Split "owner-controlled" into owner, -, controlled with no spaces, the
+// way the revised Penn Treebank (and spaCy) tokenize it; the benepar_en3
+// models were trained on that. Kept whole: numbers, URLs, words with a
+// prefix from HYPHEN_PREFIXES or a one-letter first part (e-mail), and
+// anything with an empty part ("--", "owner-" in "owner- and").
+fn split_hyphenated(word: &str) -> Option<Vec<&str>> {
+    if !word.contains('-') || is_number(word) || is_url_or_email(word) {
+        return None;
+    }
+    let parts: Vec<&str> = word.split('-').collect();
+    if parts.iter().any(|p| p.is_empty()) {
+        return None;
+    }
+    let first = parts[0].to_lowercase();
+    if first.chars().count() == 1 || HYPHEN_PREFIXES.contains(&first.as_str()) {
+        return None;
+    }
+    Some(parts)
+}
+
+pub fn split_hyphens(sent: &Sentence) -> Sentence {
+    let mut out = Sentence { words: Vec::new(), space_after: Vec::new() };
+    for (w, &space) in sent.words.iter().zip(&sent.space_after) {
+        match split_hyphenated(w) {
+            Some(parts) => {
+                for (i, p) in parts.iter().enumerate() {
+                    if i > 0 {
+                        out.words.push("-".into());
+                        out.space_after.push(false);
+                    }
+                    out.words.push(p.to_string());
+                    out.space_after.push(false);
+                }
+                *out.space_after.last_mut().unwrap() = space;
+            }
+            None => {
+                out.words.push(w.clone());
+                out.space_after.push(space);
+            }
+        }
+    }
+    out
+}
+
+/// Sentences with hyphenated words split, as the models expect.
 pub fn sentences(text: &str) -> Vec<Sentence> {
+    sentences_keep_hyphens(text).iter().map(split_hyphens).collect()
+}
+
+/// Sentences with hyphenated words left as one word each.
+pub fn sentences_keep_hyphens(text: &str) -> Vec<Sentence> {
     let mut out = Vec::new();
     let mut cur = Sentence { words: Vec::new(), space_after: Vec::new() };
     let chunks: Vec<&str> = text.split_whitespace().collect();
@@ -275,10 +333,28 @@ mod tests {
         );
         assert_eq!(
             words("A well-known fact: you cannot win.")[0],
-            ["A", "well-known", "fact", ":", "you", "can", "not", "win", "."]
+            ["A", "well", "-", "known", "fact", ":", "you", "can", "not", "win", "."]
         );
         assert_eq!(words("Wait... really?")[0], ["Wait", "...", "really", "?"]);
         assert_eq!(words("Wait... Really?").len(), 2);
+    }
+
+    #[test]
+    fn hyphens_split_like_the_revised_treebank() {
+        let s = &sentences("The owner-operator-controlled trucks, a self-governing e-mail.")[0];
+        assert_eq!(
+            s.words,
+            ["The", "owner", "-", "operator", "-", "controlled", "trucks", ",", "a",
+             "self-governing", "e-mail", "."]
+        );
+        assert_eq!(s.space_after[..7], [true, false, false, false, false, true, false]);
+        assert_eq!(words("Call 555-1234 or see https://a-b.com now.")[0][1], "555-1234");
+        assert_eq!(words("Call 555-1234 or see https://a-b.com now.")[0][4], "https://a-b.com");
+        assert_eq!(words("owner- and manager-controlled")[0], ["owner-", "and", "manager", "-", "controlled"]);
+        assert_eq!(
+            sentences_keep_hyphens("The owner-controlled firms.")[0].words,
+            ["The", "owner-controlled", "firms", "."]
+        );
     }
 
     #[test]
