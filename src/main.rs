@@ -41,6 +41,10 @@ struct Args {
     /// antecedent in brackets
     #[arg(long)]
     canonical: bool,
+    /// Print the hyphenated compounds of every sentence as JSON: parts,
+    /// tags, pattern and the role of the left part
+    #[arg(long)]
+    compounds: bool,
     /// Keep hyphenated words whole ("owner-controlled") instead of
     /// splitting them at the hyphen as the treebank does
     #[arg(long)]
@@ -169,7 +173,15 @@ fn main() -> Result<()> {
         }
         return Ok(());
     }
-    for parse in parses {
+    for (i, parse) in parses.iter().enumerate() {
+        if args.compounds {
+            for c in parse.compounds() {
+                let mut v = serde_json::to_value(&c)?;
+                v["sentence"] = serde_json::json!(i);
+                println!("{v}");
+            }
+            continue;
+        }
         if args.json {
             println!("{}", parse.to_json());
             continue;

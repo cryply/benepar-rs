@@ -75,6 +75,36 @@ the hook for indexing notes by what they mention. It is a baseline, not a
 coreference system: no world knowledge, no plural-to-group matching, no
 "the company" = "Acme".
 
+## Hyphenated compounds
+
+`--compounds` lists the hyphenated words of every sentence with their parts
+and the role of the left part, worked out from the head's tag; `--json`
+output carries the same list under `compounds`.
+
+```
+$ benepar-rs --model ./benepar_en3 --compounds "The owner-controlled firm bought a time-consuming, 16-year-old, well-known plan."
+{"text":"owner-controlled","left":"owner","head":"controlled","left_tag":"NN","head_tag":"VBN","pattern":"N-Ved","role":null,"reading":"X controlled by/with/in owner",...}
+{"text":"time-consuming","left":"time","head":"consuming","pattern":"N-Ving","role":"object","reading":"X consuming time",...}
+{"text":"16-year-old","left":"16-year","head":"old","pattern":"Num-N-Adj","role":"measure","reading":"X 16-year old",...}
+{"text":"well-known","left":"well","head":"known","pattern":"Adv-Ved","role":"manner","reading":"X known well",...}
+```
+
+The right element is the head and its type fixes the role of the left one
+(`src/compounds.rs`): the object for N-Ving, manner for Adv-Ved and
+Adv-Ving, the adjective's complement for N-Adj (oil-rich), an attributive
+phrase for Adj-N and Num-N (long-term, three-page), a measure phrase for
+Num-N-Adj, coordination for chains of nouns (Rome-Berlin-Tokyo). Chains are
+reported once, as the outer compound, with the inner one as the left part
+(owner-operator-controlled). Collapsed phrases (state-of-the-art,
+easy-to-use) get `pattern: "phrase"` and read as ordinary syntax without
+the hyphens.
+
+N-Ved is the one pattern the tree does not decide: the left noun can be
+the agent (owner-controlled), an instrument (hand-made) or a place
+(London-based), so `role` is left `null` there for a lexicon or a model to
+fill in. Keyed by the two lemmas, one such entry covers owner-controlled
+and owner-controlling alike.
+
 ## Model files
 
 Get `benepar_en3` (T5-small, 49 MB download) or `benepar_en3_large`

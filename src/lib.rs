@@ -9,6 +9,7 @@
 //! ```
 
 pub mod chart;
+pub mod compounds;
 pub mod mentions;
 pub mod model;
 #[allow(dead_code)]
@@ -35,6 +36,11 @@ pub struct Parse {
 }
 
 impl Parse {
+    /// Hyphenated compounds in the best tree, with the role of the left part.
+    pub fn compounds(&self) -> Vec<compounds::Compound> {
+        self.trees.first().map(|(_, t)| compounds::find(t)).unwrap_or_default()
+    }
+
     pub fn to_json(&self) -> serde_json::Value {
         serde_json::json!({
             "words": self.words,
@@ -44,6 +50,7 @@ impl Parse {
                 "bracketed": t.to_string(),
                 "tree": t.to_json(),
             })).collect::<Vec<_>>(),
+            "compounds": self.compounds(),
         })
     }
 }
