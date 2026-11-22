@@ -101,7 +101,10 @@ cargo build --release
 cargo test
 ```
 
-CPU only for now.
+CPU only for now. `--threads N` parses N sentences at once on separate
+threads; the weights are shared. Matrix products already use all cores for
+one sentence, so on a 2-core machine this gives about 20%, on a machine with
+many cores much more. Output order is unchanged.
 
 ## Limits
 

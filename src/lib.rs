@@ -79,9 +79,55 @@ impl Parser {
 
     /// Split raw text into sentences and parse each one.
     pub fn parse_text(&mut self, text: &str, k: usize, label_variants: usize) -> Result<Vec<Parse>> {
-        text::sentences(text)
-            .iter()
-            .map(|s| self.parse_sentence(s, k, label_variants))
+        self.parse_sentences(&text::sentences(text), k, label_variants, 1)
+    }
+
+    /// Parse sentences on `threads` worker threads. Each worker gets a
+    /// clone of the parser (the weights are shared, only small buffers are
+    /// copied). Results come back in input order.
+    pub fn parse_sentences(
+        &mut self,
+        sents: &[Sentence],
+        k: usize,
+        label_variants: usize,
+        threads: usize,
+    ) -> Result<Vec<Parse>> {
+        self.parse_sentences_lenient(sents, k, label_variants, threads)
+            .into_iter()
             .collect()
+    }
+
+    /// Like `parse_sentences`, but a sentence that fails (too long, empty)
+    /// gives an error in its slot instead of failing the whole batch.
+    pub fn parse_sentences_lenient(
+        &mut self,
+        sents: &[Sentence],
+        k: usize,
+        label_variants: usize,
+        threads: usize,
+    ) -> Vec<Result<Parse>> {
+        let threads = threads.max(1).min(sents.len().max(1));
+        if threads == 1 {
+            return sents.iter().map(|s| self.parse_sentence(s, k, label_variants)).collect();
+        }
+        let next = std::sync::atomic::AtomicUsize::new(0);
+        let mut slots: Vec<Option<Result<Parse>>> = (0..sents.len()).map(|_| None).collect();
+        let slots_ref = std::sync::Mutex::new(&mut slots);
+        std::thread::scope(|scope| {
+            for _ in 0..threads {
+                let mut worker = self.clone();
+                let next = &next;
+                let slots_ref = &slots_ref;
+                scope.spawn(move || loop {
+                    let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    if i >= sents.len() {
+                        break;
+                    }
+                    let r = worker.parse_sentence(&sents[i], k, label_variants);
+                    slots_ref.lock().unwrap()[i] = Some(r);
+                });
+            }
+        });
+        slots.into_iter().map(|s| s.expect("every sentence is parsed")).collect()
     }
 }
