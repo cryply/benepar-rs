@@ -1,4 +1,4 @@
-use benepar_rs::{chart, model, text, tree, treebank};
+use benepar_rs::{model, text, treebank};
 use anyhow::{Context, Result};
 use clap::Parser as _;
 use std::io::Read;
@@ -30,15 +30,17 @@ struct Args {
     /// Print one JSON object per sentence instead of bracketed trees
     #[arg(long)]
     json: bool,
+    /// Parse this many sentences at once on separate threads
+    #[arg(long, default_value_t = 1)]
+    threads: usize,
     /// Text to parse; read from stdin when missing
     text: Option<String>,
 }
 
-fn evaluate(parser: &mut model::Parser, file: &std::path::Path, limit: Option<usize>) -> Result<()> {
+fn evaluate(parser: &mut model::Parser, file: &std::path::Path, limit: Option<usize>, threads: usize) -> Result<()> {
     let data = std::fs::read_to_string(file).with_context(|| format!("reading {}", file.display()))?;
-    let mut counts = treebank::Counts::default();
-    let mut skipped = 0usize;
-    let started = std::time::Instant::now();
+    let mut golds = Vec::new();
+    let mut sents = Vec::new();
     for (n, line) in data.lines().filter(|l| !l.trim().is_empty()).enumerate() {
         if limit.is_some_and(|l| n >= l) {
             break;
@@ -48,26 +50,27 @@ fn evaluate(parser: &mut model::Parser, file: &std::path::Path, limit: Option<us
             .iter()
             .map(|(_, w)| treebank::unescape(w))
             .collect();
-        let spaces = treebank::guess_spaces(&words);
-        let out = match parser.parse(&words, &spaces) {
-            Ok(o) => o,
-            Err(e) => {
-                eprintln!("line {}: {e}", n + 1);
-                skipped += 1;
-                continue;
+        let space_after = treebank::guess_spaces(&words);
+        sents.push(text::Sentence { words, space_after });
+        golds.push(gold);
+    }
+    let started = std::time::Instant::now();
+    let mut counts = treebank::Counts::default();
+    let mut skipped = 0usize;
+    // Chunks keep memory bounded and give progress output.
+    for (ci, chunk) in sents.chunks(200).enumerate() {
+        let results = parser.parse_sentences_lenient(chunk, 1, 1, threads);
+        for (i, r) in results.into_iter().enumerate() {
+            let n = ci * 200 + i;
+            match r {
+                Ok(p) => counts.add(&golds[n], &p.trees[0].1),
+                Err(e) => {
+                    eprintln!("line {}: {e}", n + 1);
+                    skipped += 1;
+                }
             }
-        };
-        let leaves: Vec<tree::Node> = words
-            .iter()
-            .zip(&out.tags)
-            .map(|(w, t)| tree::Node::leaf(t, w))
-            .collect();
-        let c = chart::Chart::decode(&out.scores, 1, 1, parser.force_root);
-        let pred = c.tree(0, &parser.labels, &leaves);
-        counts.add(&gold, &pred);
-        if (n + 1) % 200 == 0 {
-            eprintln!("{} sentences, F1 {:.2}", n + 1, counts.f1());
         }
+        eprintln!("{} sentences, F1 {:.2}", counts.sentences + skipped, counts.f1());
     }
     let secs = started.elapsed().as_secs_f64();
     println!("sentences   {}", counts.sentences);
@@ -77,7 +80,7 @@ fn evaluate(parser: &mut model::Parser, file: &std::path::Path, limit: Option<us
     println!("F1          {:.2}", counts.f1());
     println!("exact match {:.2}", counts.exact_match());
     println!("tag acc     {:.2}", counts.tag_accuracy());
-    println!("time        {:.1} s ({:.3} s per sentence)", secs, secs / counts.sentences.max(1) as f64);
+    println!("time        {:.1} s ({:.3} s per sentence, {threads} threads)", secs, secs / counts.sentences.max(1) as f64);
     Ok(())
 }
 
@@ -101,7 +104,7 @@ fn main() -> Result<()> {
     prepare_weights(&args.model)?;
     if let Some(file) = &args.eval {
         let mut parser = model::Parser::load(&args.model).context("loading model")?;
-        return evaluate(&mut parser, file, args.limit);
+        return evaluate(&mut parser, file, args.limit, args.threads);
     }
     let text = match args.text {
         Some(t) => t,
@@ -112,8 +115,8 @@ fn main() -> Result<()> {
         }
     };
     let mut parser = model::Parser::load(&args.model).context("loading model")?;
-    for sent in text::sentences(&text) {
-        let parse = parser.parse_sentence(&sent, args.k, args.label_variants)?;
+    let sents = text::sentences(&text);
+    for parse in parser.parse_sentences(&sents, args.k, args.label_variants, args.threads)? {
         if args.json {
             println!("{}", parse.to_json());
             continue;

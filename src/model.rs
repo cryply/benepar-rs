@@ -19,6 +19,7 @@ const LN_EPS: f64 = 1e-5;
 const T5_PAD: u32 = 0;
 const T5_EOS: u32 = 1;
 
+#[derive(Clone)]
 struct Mlp {
     l0: Linear,
     norm: LayerNorm,
@@ -40,6 +41,7 @@ impl Mlp {
     }
 }
 
+#[derive(Clone)]
 struct Layer {
     w_qkv_c: Tensor,
     w_qkv_p: Tensor,
@@ -126,6 +128,8 @@ pub struct Output {
     pub tags: Vec<String>,
 }
 
+/// The loaded model. Cloning is cheap: the weights are shared.
+#[derive(Clone)]
 pub struct Parser {
     tokenizer: Tokenizer,
     t5: t5::T5ForConditionalGeneration,
