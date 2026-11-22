@@ -1,4 +1,4 @@
-use benepar_rs::{model, text, treebank};
+use benepar_rs::{mentions, model, text, treebank};
 use anyhow::{Context, Result};
 use clap::Parser as _;
 use std::io::Read;
@@ -33,6 +33,14 @@ struct Args {
     /// Parse this many sentences at once on separate threads
     #[arg(long, default_value_t = 1)]
     threads: usize,
+    /// Print the mentions (names, descriptions, pronouns with ranked
+    /// antecedents) and the entity index as JSON
+    #[arg(long)]
+    mentions: bool,
+    /// Print the text with every resolved pronoun followed by its best
+    /// antecedent in brackets
+    #[arg(long)]
+    canonical: bool,
     /// Text to parse; read from stdin when missing
     text: Option<String>,
 }
@@ -116,7 +124,29 @@ fn main() -> Result<()> {
     };
     let mut parser = model::Parser::load(&args.model).context("loading model")?;
     let sents = text::sentences(&text);
-    for parse in parser.parse_sentences(&sents, args.k, args.label_variants, args.threads)? {
+    let parses = parser.parse_sentences(&sents, args.k, args.label_variants, args.threads)?;
+    if args.mentions || args.canonical {
+        let mut all = Vec::new();
+        for (i, p) in parses.iter().enumerate() {
+            all.extend(mentions::mentions(&p.trees[0].1, i));
+        }
+        mentions::resolve(&mut all);
+        if args.canonical {
+            let words: Vec<Vec<String>> = parses.iter().map(|p| p.words.clone()).collect();
+            for line in mentions::annotate(&words, &all) {
+                println!("{line}");
+            }
+        }
+        if args.mentions {
+            let ents: Vec<serde_json::Value> = mentions::entities(&all)
+                .into_iter()
+                .map(|(name, sents)| serde_json::json!({"entity": name, "sentences": sents}))
+                .collect();
+            println!("{}", serde_json::json!({"mentions": all, "entities": ents}));
+        }
+        return Ok(());
+    }
+    for parse in parses {
         if args.json {
             println!("{}", parse.to_json());
             continue;

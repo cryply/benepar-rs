@@ -51,6 +51,30 @@ for parse in parser.parse_text("The time for action is now.", 1, 1)? {
 `parse_sentence` takes an already tokenized `Sentence`; `Parse::to_json`
 gives the same object the CLI prints.
 
+## Mentions and pronouns
+
+`--mentions` lists what the text talks about: names (runs of proper nouns),
+descriptions (noun phrases headed by a common noun) and pronouns. Every
+pronoun gets a ranked list of possible antecedents, not one answer, so the
+ambiguity stays visible. `--canonical` prints the text with each pronoun
+followed by its best antecedent in brackets:
+
+```
+$ benepar-rs --model ./benepar_en3 --canonical "Alice sent Bob the report. He read it and told her that it was too long."
+Alice sent Bob the report .
+He [Bob] read it [the report] and told her [Alice] that it [the report] was too long .
+```
+
+The rules: number agreement; names for he/she, descriptions for it;
+gender from a small list of common first names, plus whatever earlier
+pronouns in the same text already implied; a preference for subjects and
+for recent mentions; reflexives bind in their own sentence. `--mentions`
+also prints an entity index: each name or description with the sentences
+it occurs in, counting sentences that reach it through a pronoun. This is
+the hook for indexing notes by what they mention. It is a baseline, not a
+coreference system: no world knowledge, no plural-to-group matching, no
+"the company" = "Acme".
+
 ## Model files
 
 Get `benepar_en3` from the benepar model index
