@@ -1,0 +1,6 @@
+/target
+/model
+*.bin
+*.bin.bz2
+*.bin.part
+spiece.model

@@ -1,0 +1,79 @@
+# benepar-rs
+
+A Rust port of the Berkeley Neural Parser (benepar) by Nikita Kitaev:
+constituency parsing for English with the benepar_en3 model, without Python
+or PyTorch.
+
+The original is https://github.com/nikitakit/self-attentive-parser (MIT),
+described in "Constituency Parsing with a Self-Attentive Encoder" (Kitaev
+and Klein, ACL 2018) and "Multilingual Constituency Parsing with
+Self-Attention and Pre-Training" (Kitaev, Cao and Klein, ACL 2019). This
+port covers inference only: the model is loaded from the files the benepar
+authors publish, and the network and the decoder are reimplemented in Rust.
+Training is not ported.
+
+```
+$ benepar-rs --model ./benepar_en3 "The time for action is now."
+(S (NP (NP (DT The) (NN time)) (PP (IN for) (NP (NN action)))) (VP (VBZ is) (ADVP (RB now))) (. .))
+```
+
+This is the same tree the Python package prints for this sentence in its
+README.
+
+## k-best trees
+
+A sentence can have several readings. `-k N` prints the N best trees, best
+first; `--scores` adds the tree score. By default the alternatives differ in
+bracketing (attachment); `--label-variants M` also lets each span try its M
+best labels.
+
+```
+$ benepar-rs --model ./benepar_en3 -k 3 --scores "I saw the man with the telescope."
+```
+
+## Model files
+
+Get `benepar_en3` from the benepar model index
+(https://kitaev.com/benepar/index.xml) and unpack it. The directory must
+contain `config.json`, `spiece.model` and `benepar_model.bin`. A
+`benepar_model.bin.bz2` next to them is decompressed on first run. The
+weights are not part of this repository.
+
+`--model` can be replaced by the `BENEPAR_MODEL` environment variable.
+
+## How it works
+
+- Text is split into sentences and treebank-style words by simple rules
+  (`src/text.rs`); the Python package uses spaCy for this step.
+- Words are re-tokenized into T5 subwords. The tokenizer is built from
+  `spiece.model` directly (`src/spm.rs`).
+- T5-small runs as encoder plus decoder; the decoder states at the last
+  subword of each word are the word features (`src/t5.rs`, from candle).
+- A two-layer partitioned transformer keeps content and position features
+  apart, then an MLP scores every label for every span and every POS tag
+  (`src/model.rs`).
+- CKY finds the best tree, or the k best (`src/chart.rs`).
+
+## Build
+
+```
+cargo build --release
+cargo test
+```
+
+CPU only for now.
+
+## Limits
+
+- Only the benepar_en3 model layout (t5-small) is supported.
+- The rule-based tokenizer covers common English; unusual text may split
+  differently from spaCy and then parse differently.
+- Sentences up to 510 subword tokens.
+
+## License
+
+MIT. The original benepar code is Copyright (c) 2017-2018 Nikita Kitaev,
+Victor Huang and Mitchell Stern, MIT License; src/t5.rs comes from the
+candle project (MIT or Apache-2.0). Both license texts are in NOTICE. The
+benepar_en3 weights are distributed by the benepar authors under their own
+terms and are not part of this repository.
