@@ -1,14 +1,4 @@
-mod chart;
-mod model;
-#[allow(dead_code)]
-mod spm;
-#[allow(dead_code)]
-mod t5;
-mod text;
-mod treebank;
-#[allow(dead_code)]
-mod tree;
-
+use benepar_rs::{chart, model, text, tree, treebank};
 use anyhow::{Context, Result};
 use clap::Parser as _;
 use std::io::Read;
@@ -37,6 +27,9 @@ struct Args {
     /// With --eval: stop after this many sentences
     #[arg(long)]
     limit: Option<usize>,
+    /// Print one JSON object per sentence instead of bracketed trees
+    #[arg(long)]
+    json: bool,
     /// Text to parse; read from stdin when missing
     text: Option<String>,
 }
@@ -120,30 +113,16 @@ fn main() -> Result<()> {
     };
     let mut parser = model::Parser::load(&args.model).context("loading model")?;
     for sent in text::sentences(&text) {
-        let out = parser.parse(&sent.words, &sent.space_after)?;
-        let leaves: Vec<tree::Node> = sent
-            .words
-            .iter()
-            .zip(&out.tags)
-            .map(|(w, t)| tree::Node::leaf(t, w))
-            .collect();
-        // Ask for more derivations than needed: several binarizations of
-        // the same n-ary tree score the same and print the same.
-        let c = chart::Chart::decode(&out.scores, args.k * 4, args.label_variants, parser.force_root);
-        let mut seen: Vec<String> = Vec::new();
-        for r in 0..c.len() {
-            let t = c.tree(r, &parser.labels, &leaves).to_string();
-            if seen.contains(&t) {
-                continue;
-            }
+        let parse = parser.parse_sentence(&sent, args.k, args.label_variants)?;
+        if args.json {
+            println!("{}", parse.to_json());
+            continue;
+        }
+        for (score, t) in &parse.trees {
             if args.scores {
-                println!("{:.3}\t{t}", c.score(r));
+                println!("{score:.3}\t{t}");
             } else {
                 println!("{t}");
-            }
-            seen.push(t);
-            if seen.len() == args.k {
-                break;
             }
         }
         if args.k > 1 {
