@@ -5,6 +5,7 @@ mod spm;
 #[allow(dead_code)]
 mod t5;
 mod text;
+mod treebank;
 #[allow(dead_code)]
 mod tree;
 
@@ -29,8 +30,62 @@ struct Args {
     /// bracketing (attachment), more also varies the labels
     #[arg(long, default_value_t = 1)]
     label_variants: usize,
+    /// Score the parser on a treebank file (one bracketed tree per line)
+    /// and print EVALB-style precision, recall and F1 instead of parsing text
+    #[arg(long, value_name = "FILE")]
+    eval: Option<PathBuf>,
+    /// With --eval: stop after this many sentences
+    #[arg(long)]
+    limit: Option<usize>,
     /// Text to parse; read from stdin when missing
     text: Option<String>,
+}
+
+fn evaluate(parser: &mut model::Parser, file: &std::path::Path, limit: Option<usize>) -> Result<()> {
+    let data = std::fs::read_to_string(file).with_context(|| format!("reading {}", file.display()))?;
+    let mut counts = treebank::Counts::default();
+    let mut skipped = 0usize;
+    let started = std::time::Instant::now();
+    for (n, line) in data.lines().filter(|l| !l.trim().is_empty()).enumerate() {
+        if limit.is_some_and(|l| n >= l) {
+            break;
+        }
+        let gold = treebank::parse(line).with_context(|| format!("tree on line {}", n + 1))?;
+        let words: Vec<String> = treebank::leaves(&gold)
+            .iter()
+            .map(|(_, w)| treebank::unescape(w))
+            .collect();
+        let spaces = treebank::guess_spaces(&words);
+        let out = match parser.parse(&words, &spaces) {
+            Ok(o) => o,
+            Err(e) => {
+                eprintln!("line {}: {e}", n + 1);
+                skipped += 1;
+                continue;
+            }
+        };
+        let leaves: Vec<tree::Node> = words
+            .iter()
+            .zip(&out.tags)
+            .map(|(w, t)| tree::Node::leaf(t, w))
+            .collect();
+        let c = chart::Chart::decode(&out.scores, 1, 1, parser.force_root);
+        let pred = c.tree(0, &parser.labels, &leaves);
+        counts.add(&gold, &pred);
+        if (n + 1) % 200 == 0 {
+            eprintln!("{} sentences, F1 {:.2}", n + 1, counts.f1());
+        }
+    }
+    let secs = started.elapsed().as_secs_f64();
+    println!("sentences   {}", counts.sentences);
+    println!("skipped     {skipped}");
+    println!("precision   {:.2}", counts.precision());
+    println!("recall      {:.2}", counts.recall());
+    println!("F1          {:.2}", counts.f1());
+    println!("exact match {:.2}", counts.exact_match());
+    println!("tag acc     {:.2}", counts.tag_accuracy());
+    println!("time        {:.1} s ({:.3} s per sentence)", secs, secs / counts.sentences.max(1) as f64);
+    Ok(())
 }
 
 fn prepare_weights(dir: &std::path::Path) -> Result<()> {
@@ -51,6 +106,10 @@ fn prepare_weights(dir: &std::path::Path) -> Result<()> {
 fn main() -> Result<()> {
     let args = Args::parse();
     prepare_weights(&args.model)?;
+    if let Some(file) = &args.eval {
+        let mut parser = model::Parser::load(&args.model).context("loading model")?;
+        return evaluate(&mut parser, file, args.limit);
+    }
     let text = match args.text {
         Some(t) => t,
         None => {

@@ -54,6 +54,26 @@ weights are not part of this repository.
   (`src/model.rs`).
 - CKY finds the best tree, or the k best (`src/chart.rs`).
 
+## Accuracy
+
+`--eval FILE` scores the parser on a treebank file with one bracketed tree
+per line and prints EVALB-style numbers (TOP ignored, punctuation not
+counted, ADVP and PRT merged). The words are taken from the gold trees, so
+this measures the model port, not the tokenizer.
+
+```
+$ benepar-rs --model ./benepar_en3 --eval 23.auto.clean
+```
+
+On WSJ section 23 as shipped in the benepar repository
+(`data/23.auto.clean`, 2416 sentences, classic PTB tokenization and
+annotation) this port gets F1 93.82, exact match 40.89%, POS accuracy
+95.80%, at about 0.09 s per sentence on two CPU cores. The benepar authors
+report F1 95.40 for benepar_en3 on the revised WSJ test set (LDC2015T13),
+which uses different tokenization and annotation guidelines, so the two
+numbers are not directly comparable; the gap is in line with that
+difference.
+
 ## Build
 
 ```
