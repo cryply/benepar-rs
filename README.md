@@ -77,7 +77,8 @@ coreference system: no world knowledge, no plural-to-group matching, no
 
 ## Model files
 
-Get `benepar_en3` from the benepar model index
+Get `benepar_en3` (T5-small, 49 MB download) or `benepar_en3_large`
+(T5-large, 716 MB download, 3 GB unpacked) from the benepar model index
 (https://kitaev.com/benepar/index.xml) and unpack it. The directory must
 contain `config.json`, `spiece.model` and `benepar_model.bin`. A
 `benepar_model.bin.bz2` next to them is decompressed on first run. The
@@ -91,7 +92,7 @@ weights are not part of this repository.
   (`src/text.rs`); the Python package uses spaCy for this step.
 - Words are re-tokenized into T5 subwords. The tokenizer is built from
   `spiece.model` directly (`src/spm.rs`).
-- T5-small runs as encoder plus decoder; the decoder states at the last
+- T5 runs as encoder plus decoder; the decoder states at the last
   subword of each word are the word features (`src/t5.rs`, from candle).
 - A two-layer partitioned transformer keeps content and position features
   apart, then an MLP scores every label for every span and every POS tag
@@ -126,6 +127,11 @@ tokenized trees.
 On `data/23.auto.clean` from the benepar repository (classic PTB
 annotation, which the model was not trained on) it gets F1 93.82.
 
+`benepar_en3_large` loads with the same code and gets F1 96.21 on the
+same test set against the authors' 96.29, with exact match 56.46% and POS
+accuracy 97.90%. It is about 9 times slower (0.45 s per sentence on 8
+threads) and needs about 3 GB of memory.
+
 ## Build
 
 ```
@@ -140,7 +146,7 @@ many cores much more. Output order is unchanged.
 
 ## Limits
 
-- Only the benepar_en3 model layout (t5-small) is supported.
+- Only the benepar_en3 and benepar_en3_large layouts (T5) are supported.
 - The rule-based tokenizer covers common English; unusual text may split
   differently from spaCy and then parse differently.
 - Sentences up to 510 subword tokens.
@@ -150,5 +156,5 @@ many cores much more. Output order is unchanged.
 MIT. The original benepar code is Copyright (c) 2017-2018 Nikita Kitaev,
 Victor Huang and Mitchell Stern, MIT License; src/t5.rs comes from the
 candle project (MIT or Apache-2.0). Both license texts are in NOTICE. The
-benepar_en3 weights are distributed by the benepar authors under their own
+benepar weights are distributed by the benepar authors under their own
 terms and are not part of this repository.
