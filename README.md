@@ -180,6 +180,48 @@ every condition against the first one. The Winograd Schema Collection
 (https://cs.nyu.edu/faculty/davise/papers/WinogradSchemas/WSCollection.xml)
 holds 285 schemas; the first 273 are WSC273.
 
+## Sentence skeleton
+
+`--skeleton` reads the events of every sentence off the tree with head
+rules: each verb with its subject, objects, prepositional and clause
+arguments. The skeleton is kept apart from the words that fill it: with
+`--json` every argument carries its word positions, its head word and the
+index of the mention it is, so "sent(Alice; Bob, the report)" can be
+stored next to the entities it links.
+
+```
+$ benepar-rs --model ./benepar_en3 --skeleton "Alice sent Bob the report. It was not approved by the board, which had been told to wait."
+s0 e1 sent  subject=Alice  indirect=Bob  object=the report
+s1 e1 approved [was] not passive  object=It  subject=the board
+s1 e2 told [had been] passive  object=the board  clause=e3
+s1 e3 wait [to]  subject=the board
+```
+
+Roles are grammatical, normalized for voice: in a passive the surface
+subject is the `object` and the `by` phrase the `subject`. Auxiliaries,
+modals and particles are listed in brackets, negation as `not`. Handled:
+auxiliary chains, passives, verb coordination (one subject, two events),
+prepositional arguments (`prep:into`), clause arguments (`clause:because`
+points at the inner event), control ("told Alice to leave": Alice leaves;
+"wanted to leave": the subject leaves), subject relatives and reduced
+relatives (the noun is the subject of the inner event), copulas with
+their `complement`. Not handled: inversion, object relatives, ellipsis.
+Nothing here knows what a verb means; roles are not semantic.
+
+`--eval-skeleton FILE` scores the skeleton against the function tags of
+the original treebank (`NP-SBJ`, traces and their coindexes): precision
+and recall of (verb, subject head) and (verb, object head) pairs, both
+from our parses and from the gold trees themselves, so that parse errors
+and rule errors can be told apart. Takes the same files as `--eval`.
+
+On section 23 (2416 sentences) with benepar_en3, (verb, subject) pairs
+score P 72.2 / R 83.5 / F1 77.4 from our parses and 74.5 / 85.3 / 79.6
+from the gold trees; (verb, object) pairs 77.2 / 92.8 / 84.3 and 79.2 /
+94.5 / 86.2. Parsing costs about two points; the rest is the rules. The
+precision gap is mostly by design: the rules fill in controlled subjects
+the treebank leaves empty, and count temporal and predicative noun
+phrases ("left yesterday", "became president") as objects.
+
 ## Hyphenated compounds
 
 `--compounds` lists the hyphenated words of every sentence with their parts

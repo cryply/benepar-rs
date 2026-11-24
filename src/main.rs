@@ -1,4 +1,4 @@
-use benepar_rs::{gap, mentions, model, pronominalize, text, treebank};
+use benepar_rs::{gap, mentions, model, pronominalize, skeleton, text, treebank};
 use anyhow::{Context, Result};
 use clap::Parser as _;
 use std::io::Read;
@@ -24,6 +24,10 @@ struct Args {
     /// files and print EVALB-style precision, recall and F1
     #[arg(long, value_name = "FILE")]
     eval: Option<PathBuf>,
+    /// Score the sentence skeleton (subject and object of every verb)
+    /// against the function tags of a treebank file or directory
+    #[arg(long, value_name = "FILE")]
+    eval_skeleton: Option<PathBuf>,
     /// Score the pronoun rules on a GAP .tsv file (gap-development.tsv,
     /// gap-test.tsv) and print GAP F1 by gender, plus precision by margin
     #[arg(long, value_name = "FILE")]
@@ -51,6 +55,11 @@ struct Args {
     /// object with the lines and the list of replacements
     #[arg(long)]
     pronominalize: bool,
+    /// Print the skeleton of every sentence: each verb with its subject,
+    /// objects, prepositional and clause arguments; with --json, the
+    /// events with word positions and mention indices
+    #[arg(long)]
+    skeleton: bool,
     /// With --canonical: annotate a pronoun only if its best antecedent is
     /// at least this far ahead of the next one that is not the same name;
     /// with --pronominalize: insert a pronoun only with this margin
@@ -68,9 +77,9 @@ struct Args {
     text: Option<String>,
 }
 
-fn evaluate(parser: &mut model::Parser, file: &std::path::Path, limit: Option<usize>, threads: usize) -> Result<()> {
-    // A file with trees, or a directory of .mrg/.tree files (an LDC
-    // section such as penntree/23), read in name order.
+// Trees of a file, or of every .mrg/.tree file in a directory (an LDC
+// section such as penntree/23), read in name order.
+fn read_trees(file: &std::path::Path) -> Result<Vec<benepar_rs::Node>> {
     let mut paths = Vec::new();
     if file.is_dir() {
         for e in std::fs::read_dir(file)? {
@@ -89,6 +98,11 @@ fn evaluate(parser: &mut model::Parser, file: &std::path::Path, limit: Option<us
         let trees = treebank::parse_many(&data).with_context(|| format!("parsing {}", p.display()))?;
         raw.extend(trees);
     }
+    Ok(raw)
+}
+
+fn evaluate(parser: &mut model::Parser, file: &std::path::Path, limit: Option<usize>, threads: usize) -> Result<()> {
+    let raw = read_trees(file)?;
     let mut golds = Vec::new();
     let mut sents = Vec::new();
     for (n, tree) in raw.iter().enumerate() {
@@ -131,6 +145,57 @@ fn evaluate(parser: &mut model::Parser, file: &std::path::Path, limit: Option<us
     println!("exact match {:.2}", counts.exact_match());
     println!("tag acc     {:.2}", counts.tag_accuracy());
     println!("time        {:.1} s ({:.3} s per sentence, {threads} threads)", secs, secs / counts.sentences.max(1) as f64);
+    Ok(())
+}
+
+fn evaluate_skeleton(parser: &mut model::Parser, file: &std::path::Path, limit: Option<usize>, threads: usize) -> Result<()> {
+    let raw = read_trees(file)?;
+    let mut golds = Vec::new();
+    let mut sents = Vec::new();
+    for (n, tree) in raw.iter().enumerate() {
+        if limit.is_some_and(|l| n >= l) {
+            break;
+        }
+        let Some(clean) = treebank::clean(tree) else { continue };
+        let words: Vec<String> = treebank::leaves(&clean).iter().map(|(_, w)| treebank::unescape(w)).collect();
+        let space_after = treebank::guess_spaces(&words);
+        sents.push(text::Sentence { words, space_after });
+        golds.push((skeleton::gold_relations(tree), clean));
+    }
+    let started = std::time::Instant::now();
+    let mut ours = skeleton::Counts::default();
+    // the same rules on the gold trees: how much is lost in parsing
+    let mut on_gold = skeleton::Counts::default();
+    let mut skipped = 0usize;
+    for (ci, chunk) in sents.chunks(200).enumerate() {
+        let results = parser.parse_sentences_lenient(chunk, 1, 1, threads);
+        for (i, r) in results.into_iter().enumerate() {
+            let n = ci * 200 + i;
+            let (gold, clean) = &golds[n];
+            match r {
+                Ok(p) => {
+                    let ev = skeleton::events(&p.trees[0].1, 0, &[]);
+                    ours.add(gold, &skeleton::relations(&ev));
+                    let ev = skeleton::events(clean, 0, &[]);
+                    on_gold.add(gold, &skeleton::relations(&ev));
+                }
+                Err(e) => {
+                    eprintln!("line {}: {e}", n + 1);
+                    skipped += 1;
+                }
+            }
+        }
+        eprintln!("{} sentences", (ci + 1) * 200);
+    }
+    println!("sentences {}  skipped {skipped}", golds.len());
+    println!("relation  trees        P      R      F1    gold  pred");
+    for (name, c) in [("our parses", &ours), ("gold trees", &on_gold)] {
+        let (p, r, f) = skeleton::Counts::f1(c.subj_match, c.subj_gold, c.subj_pred);
+        println!("subject   {name}  {p:5.1}  {r:5.1}  {f:5.1}  {:5}  {:5}", c.subj_gold, c.subj_pred);
+        let (p, r, f) = skeleton::Counts::f1(c.obj_match, c.obj_gold, c.obj_pred);
+        println!("object    {name}  {p:5.1}  {r:5.1}  {f:5.1}  {:5}  {:5}", c.obj_gold, c.obj_pred);
+    }
+    println!("time      {:.1} s", started.elapsed().as_secs_f64());
     Ok(())
 }
 
@@ -201,6 +266,10 @@ fn main() -> Result<()> {
         let mut parser = model::Parser::load(&args.model).context("loading model")?;
         return evaluate(&mut parser, file, args.limit, args.threads);
     }
+    if let Some(file) = &args.eval_skeleton {
+        let mut parser = model::Parser::load(&args.model).context("loading model")?;
+        return evaluate_skeleton(&mut parser, file, args.limit, args.threads);
+    }
     if let Some(file) = &args.gap {
         let mut parser = model::Parser::load(&args.model).context("loading model")?;
         return evaluate_gap(&mut parser, file, &args);
@@ -225,6 +294,24 @@ fn main() -> Result<()> {
             for line in r.lines() {
                 println!("{line}");
             }
+        }
+        return Ok(());
+    }
+    if args.skeleton {
+        let mut out = Vec::new();
+        for (i, p) in parses.iter().enumerate() {
+            let m = mentions::mentions(&p.trees[0].1, i);
+            let ev = skeleton::events(&p.trees[0].1, i, &m);
+            if args.json {
+                out.push(serde_json::json!({"sentence": i, "events": ev, "mentions": m}));
+            } else {
+                for line in skeleton::lines(&ev) {
+                    println!("s{i} {line}");
+                }
+            }
+        }
+        if args.json {
+            println!("{}", serde_json::Value::Array(out));
         }
         return Ok(());
     }

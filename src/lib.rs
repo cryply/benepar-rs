@@ -14,6 +14,7 @@ pub mod gap;
 pub mod mentions;
 pub mod model;
 pub mod pronominalize;
+pub mod skeleton;
 #[allow(dead_code)]
 pub mod spm;
 #[allow(dead_code)]
