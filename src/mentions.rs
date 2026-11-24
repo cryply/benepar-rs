@@ -43,6 +43,11 @@ pub struct Mention {
     // byte span in the original text, once attach_spans has run
     #[serde(skip_serializing_if = "Option::is_none")]
     pub span: Option<(usize, usize)>,
+    // a name inside a flat coordination ("Mary" in "John and Mary"); not
+    // offered as an antecedent, the rules cannot tell when one conjunct
+    // is meant
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub conjunct: bool,
     // for pronouns: ranked antecedent candidates, best first
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub candidates: Vec<Candidate>,
@@ -60,7 +65,7 @@ pub struct Candidate {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Gender {
+pub(crate) enum Gender {
     Male,
     Female,
 }
@@ -87,7 +92,7 @@ const FEMALE: &[&str] = &[
     "helen", "irene", "nina", "vera", "diana", "elena", "marina", "tanya", "anya", "clara",
 ];
 
-fn gender_of_name(text: &str) -> Option<Gender> {
+pub(crate) fn gender_of_name(text: &str) -> Option<Gender> {
     let mut parts = text.split_whitespace().map(|w| w.trim_matches('.').to_lowercase());
     let first = parts.next()?;
     match first.as_str() {
@@ -114,7 +119,7 @@ fn gender_of_name(text: &str) -> Option<Gender> {
     }
 }
 
-fn pronoun_gender(p: &str) -> Option<Gender> {
+pub(crate) fn pronoun_gender(p: &str) -> Option<Gender> {
     match p {
         "he" | "him" | "his" | "himself" => Some(Gender::Male),
         "she" | "her" | "hers" | "herself" => Some(Gender::Female),
@@ -186,7 +191,9 @@ fn walk(t: &Node, start: usize, sentence: usize, subject: bool, out: &mut Vec<Me
     }
 
     // Lone pronouns and names do not always get an NP of their own in the
-    // tree (e.g. coordinated), so look at leaves directly too.
+    // tree (e.g. coordinated), so look at leaves directly too. In a flat
+    // coordination ("John and Mary") the names are mentions of their own.
+    let coordination = is_np && kids.iter().any(|k| matches!(k, Node::Leaf(t, _) if t == "CC"));
     let mut pos = start;
     let mut i = 0;
     while i < kids.len() {
@@ -198,7 +205,7 @@ fn walk(t: &Node, start: usize, sentence: usize, subject: bool, out: &mut Vec<Me
             Node::Leaf(tag, word) if is_pronoun_tag(tag) && (!is_np || (tag == "PRP$" && kids.len() > 1)) => {
                 out.push(pronoun(word, tag, pos, sentence, subject));
             }
-            Node::Leaf(tag, _) if is_name_tag(tag) && !is_np => {
+            Node::Leaf(tag, _) if is_name_tag(tag) && (!is_np || coordination) => {
                 // run of names outside an NP
                 let mut j = i;
                 let mut words = Vec::new();
@@ -212,7 +219,9 @@ fn walk(t: &Node, start: usize, sentence: usize, subject: bool, out: &mut Vec<Me
                     }
                     break;
                 }
-                out.push(name_mention(&words, pos, sentence, subject));
+                let mut m = name_mention(&words, pos, sentence, subject && !coordination);
+                m.conjunct = coordination;
+                out.push(m);
                 pos += words.len();
                 i = j;
                 continue;
@@ -242,6 +251,7 @@ fn name_mention(words: &[(&str, &str)], start: usize, sentence: usize, subject: 
         number: if plural { Number::Plural } else { Number::Singular },
         subject,
         span: None,
+        conjunct: false,
         candidates: Vec::new(),
     }
 }
@@ -264,6 +274,7 @@ fn pronoun(word: &str, tag: &str, pos: usize, sentence: usize, subject: bool) ->
         number,
         subject,
         span: None,
+        conjunct: false,
         candidates: Vec::new(),
     }
 }
@@ -307,6 +318,7 @@ fn base_np(t: &Node, start: usize, sentence: usize, subject: bool) -> Option<Men
     }
     let head = core.iter().rev().find(|l| is_noun_tag(l.tag))?;
     let number = match head.tag {
+        _ if core.iter().any(|l| l.tag == "CC" && matches!(l.word.to_lowercase().as_str(), "and" | "both")) => Number::Plural,
         "NNS" | "NNPS" => Number::Plural,
         "NN" | "NNP" => Number::Singular,
         _ => Number::Unknown,
@@ -322,6 +334,7 @@ fn base_np(t: &Node, start: usize, sentence: usize, subject: bool) -> Option<Men
         number,
         subject,
         span: None,
+        conjunct: false,
         candidates: Vec::new(),
     })
 }
@@ -357,7 +370,7 @@ pub fn resolve(all: &mut [Mention]) {
         let animate = want.is_some();
         let mut cands: Vec<Candidate> = Vec::new();
         for (j, c) in snapshot.iter().enumerate() {
-            if j >= i || c.kind == Kind::Pronoun {
+            if j >= i || c.kind == Kind::Pronoun || c.conjunct {
                 continue;
             }
             if reflexive && c.sentence != m.sentence {
@@ -439,7 +452,7 @@ pub fn resolve(all: &mut [Mention]) {
 
 // Words joined by spaces, except around a hyphen that was split out of a
 // word ("owner - controlled" is printed as "owner-controlled").
-fn join_words<S: AsRef<str>>(words: &[S]) -> String {
+pub(crate) fn join_words<S: AsRef<str>>(words: &[S]) -> String {
     let words: Vec<&str> = words.iter().map(|w| w.as_ref()).collect();
     words.join(" ").replace(" - ", "-")
 }
@@ -461,7 +474,7 @@ pub fn attach_spans(all: &mut [Mention], offsets: &[Vec<(usize, usize)>]) {
 
 const NOT_NAME_WORDS: &[&str] = &["the", "a", "an", "this", "that", "these", "those", "mr", "mrs", "ms", "dr", "prof"];
 
-fn name_words(text: &str) -> Vec<String> {
+pub(crate) fn name_words(text: &str) -> Vec<String> {
     text.split(|c: char| c.is_whitespace() || c == '-')
         .filter(|w| w.chars().next().is_some_and(|c| c.is_uppercase()))
         .map(|w| w.trim_matches('.').to_lowercase())
@@ -663,6 +676,25 @@ mod tests {
         let she = all.iter().find(|m| m.text == "She").unwrap();
         assert_eq!(she.span, Some((12, 15)));
         assert_eq!(she.candidates[0].span, Some((0, 5)));
+    }
+
+    #[test]
+    fn flat_coordination_is_plural_with_its_names() {
+        let m = mentions(
+            &parse("(S (NP (NNP John) (CC and) (NNP Mary)) (VP (VBD bought) (NP (DT a) (NN house))) (. .))").unwrap(),
+            0,
+        );
+        let texts: Vec<(&str, Kind, Number)> = m.iter().map(|x| (x.text.as_str(), x.kind, x.number)).collect();
+        assert_eq!(
+            texts,
+            vec![
+                ("John and Mary", Kind::Nominal, Number::Plural),
+                ("John", Kind::Name, Number::Singular),
+                ("Mary", Kind::Name, Number::Singular),
+                ("a house", Kind::Nominal, Number::Singular),
+            ]
+        );
+        assert!(m[1].conjunct && m[2].conjunct && !m[0].conjunct);
     }
 
     #[test]

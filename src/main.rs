@@ -1,4 +1,4 @@
-use benepar_rs::{gap, mentions, model, text, treebank};
+use benepar_rs::{gap, mentions, model, pronominalize, text, treebank};
 use anyhow::{Context, Result};
 use clap::Parser as _;
 use std::io::Read;
@@ -46,8 +46,14 @@ struct Args {
     /// antecedent in brackets
     #[arg(long)]
     canonical: bool,
+    /// Print the text with repeated mentions replaced by pronouns where
+    /// the pronoun still resolves to the same entity; with --json, one
+    /// object with the lines and the list of replacements
+    #[arg(long)]
+    pronominalize: bool,
     /// With --canonical: annotate a pronoun only if its best antecedent is
-    /// at least this far ahead of the next one that is not the same name
+    /// at least this far ahead of the next one that is not the same name;
+    /// with --pronominalize: insert a pronoun only with this margin
     #[arg(long, default_value_t = 0.0)]
     min_margin: f32,
     /// Print the hyphenated compounds of every sentence as JSON: parts,
@@ -210,6 +216,18 @@ fn main() -> Result<()> {
     let mut parser = model::Parser::load(&args.model).context("loading model")?;
     let sents = if args.keep_hyphens { text::sentences_keep_hyphens(&text) } else { text::sentences(&text) };
     let parses = parser.parse_sentences(&sents, args.k, args.label_variants, args.threads)?;
+    if args.pronominalize {
+        let trees: Vec<_> = parses.iter().map(|p| p.trees[0].1.clone()).collect();
+        let r = pronominalize::pronominalize(&trees, args.min_margin);
+        if args.json {
+            println!("{}", serde_json::json!({"lines": r.lines(), "replacements": r.replacements}));
+        } else {
+            for line in r.lines() {
+                println!("{line}");
+            }
+        }
+        return Ok(());
+    }
     if args.mentions || args.canonical {
         let mut all = Vec::new();
         for (i, p) in parses.iter().enumerate() {

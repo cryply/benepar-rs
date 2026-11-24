@@ -77,12 +77,47 @@ coreference system: no world knowledge, no plural-to-group matching, no
 
 Every mention and candidate in `--mentions` output carries `span`, its
 byte offsets in the input text. Possessives inside a longer noun phrase
-("his support") are pronoun mentions of their own.
+("his support") are pronoun mentions of their own. A flat coordination
+("John and Mary") is a plural mention, and its names are mentions marked
+`conjunct`: they count for the entity index and for `--pronominalize`,
+but are not offered as antecedents, since the rules cannot tell when one
+conjunct is meant (offering them cost 0.9 F1 on GAP).
 
 A pronoun's margin is how far its best antecedent scores ahead of the next
 candidate that is not the same name ("Smith" and "Alice Smith" count as
 one). `--canonical --min-margin X` leaves pronouns with a margin below X
 without a bracket.
+
+### More pronouns
+
+`--pronominalize` goes the other way: a repeated name or description
+becomes a pronoun where the pronoun still points back to it.
+
+```
+$ benepar-rs --model ./benepar_en3 --pronominalize "Alice sent Bob the report. Bob read the report and told Alice that the report was too long. Alice's manager agreed with Bob."
+Alice sent Bob the report .
+He read it and told her that it was too long .
+Her manager agreed with him .
+```
+
+A mention is a candidate when the same entity was mentioned in the same
+or the previous sentence: the same name or part of it ("Smith" after
+"Alice Smith"), or a definite description with the same head and no new
+words ("the engine" after "the new engine"). The pronoun takes its gender
+from the name list or from pronouns that already refer to the entity,
+and its case from the position: subject, possessive (`Alice 's` becomes
+`her`), otherwise object. Left as they are: names of unknown gender,
+singular descriptions of people ("the teacher"), conjuncts of a
+coordinated noun phrase, and objects whose entity is already named in
+the same sentence (they would need a reflexive).
+
+Every replacement is checked by resolving the rewritten text again with
+the rules above. It is kept only if the new pronoun resolves to the same
+entity, with at least `--min-margin` over the next candidate, and every
+other pronoun keeps its antecedent. With `--json` the output is one
+object with the rewritten lines and the replacements: position, pronoun,
+the words replaced and the entity, which is the answer key for a reader
+of the rewritten text.
 
 ### Scoring on GAP
 
@@ -103,8 +138,8 @@ names. It also prints how many free predictions are kept, and how many of
 them are right, at several margins, and how many gold names occur only
 after the pronoun (the rules look back only).
 
-On gap-development (2000 examples) with benepar_en3: restricted F1 60.8
-overall (M 60.6, F 60.9), free F1 53.4 (precision 62.2, recall 46.9). The
+On gap-development (2000 examples) with benepar_en3: restricted F1 60.9
+overall (M 60.8, F 60.9), free F1 53.5 (precision 62.2, recall 46.9). The
 margin separates right from wrong answers only weakly: precision goes from
 62.2 with every prediction kept to 67.7 at margin 2.0, where 24% of the
 examples keep a prediction. 353 of the 1799 gold names occur after the
