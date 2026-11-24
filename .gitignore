@@ -4,3 +4,4 @@
 *.bin.bz2
 *.bin.part
 spiece.model
+llm-cache/

@@ -31,6 +31,9 @@ pub struct Replacement {
 pub struct Rewrite {
     pub trees: Vec<Node>,
     pub replacements: Vec<Replacement>,
+    // for every word of every rewritten sentence, the index of the
+    // original word it came from (a pronoun: the first word it replaced)
+    pub origin: Vec<Vec<usize>>,
 }
 
 impl Rewrite {
@@ -374,7 +377,7 @@ pub fn pronominalize(trees: &[Node], min_margin: f32) -> Rewrite {
     }
     // Replacements go left to right, so a later one never moves the index
     // of an earlier one.
-    Rewrite { trees: state.trees, replacements }
+    Rewrite { trees: state.trees, replacements, origin: state.origin }
 }
 
 #[cfg(test)]
@@ -405,6 +408,8 @@ mod tests {
         let he = &r.replacements[0];
         assert_eq!((he.sentence, he.index, he.pronoun.as_str(), he.entity.as_str()), (1, 0, "He", "Bob"));
         assert_eq!(r.replacements[2].replaced, "Bob 's");
+        assert_eq!(r.origin[1], vec![0, 1, 2, 4]);
+        assert_eq!(r.origin[2], vec![0, 2, 3, 4, 5]);
     }
 
     #[test]
