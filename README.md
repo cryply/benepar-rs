@@ -145,6 +145,38 @@ margin separates right from wrong answers only weakly: precision goes from
 examples keep a prediction. 353 of the 1799 gold names occur after the
 pronoun.
 
+### Does a language model read it better?
+
+`examples/llm_test.rs` asks a chat model the GAP or Winograd question
+("who does the marked pronoun refer to: A, B or neither") about the same
+examples in several forms of the text and compares accuracy:
+
+- `raw`: the text as it is
+- `plain`: the text tokenized and joined back, as the other two see it
+- `canonical`: every resolved pronoun followed by its antecedent in brackets
+- `pronominalize`: repeated names turned into pronouns
+
+```
+$ export LLM_API_KEY=...            # OpenRouter by default, or set LLM_BASE_URL
+$ cargo run --release --example llm_test -- --model MODEL --gap gap-development.tsv --limit 300
+$ cargo run --release --example llm_test -- --model MODEL --wsc WSCollection.xml --limit 273
+```
+
+Any OpenAI-compatible chat endpoint works (`LLM_BASE_URL`, default
+`https://openrouter.ai/api/v1`; for Ollama `http://HOST:11434/v1` with no
+key). `--reasoning-effort low` keeps a thinking model short; its answer
+is read from `content`, not from its reasoning. Requests go out at
+`--rpm` per minute,
+429 and 5xx answers are retried with backoff, and every reply is cached
+in `--cache` (default `llm-cache/`), so a rerun is free and a run cut
+short continues where it stopped. `--dry-run` prints the prompts of the
+first examples instead. `--out FILE` writes one JSON line per example
+and condition. The summary gives accuracy with a 95% Wilson interval,
+prompt tokens as the endpoint reports them, and an exact McNemar test of
+every condition against the first one. The Winograd Schema Collection
+(https://cs.nyu.edu/faculty/davise/papers/WinogradSchemas/WSCollection.xml)
+holds 285 schemas; the first 273 are WSC273.
+
 ## Hyphenated compounds
 
 `--compounds` lists the hyphenated words of every sentence with their parts
