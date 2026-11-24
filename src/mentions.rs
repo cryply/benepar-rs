@@ -48,6 +48,10 @@ pub struct Mention {
     // is meant
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub conjunct: bool,
+    // object of a preposition of place ("in Evanston"): a name here is
+    // rarely a person
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub locative: bool,
     // for pronouns: ranked antecedent candidates, best first
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub candidates: Vec<Candidate>,
@@ -165,12 +169,16 @@ fn top_label(t: &Node) -> &str {
 // Mentions of one sentence. `sentence` is its index in the document.
 pub fn mentions(tree: &Node, sentence: usize) -> Vec<Mention> {
     let mut out = Vec::new();
-    walk(tree, 0, sentence, false, &mut out);
+    walk(tree, 0, sentence, false, false, &mut out);
     out.sort_by_key(|m| (m.start, std::cmp::Reverse(m.end)));
     out
 }
 
-fn walk(t: &Node, start: usize, sentence: usize, subject: bool, out: &mut Vec<Mention>) {
+const PLACE_PREPOSITIONS: &[&str] = &[
+    "in", "at", "near", "into", "onto", "across", "through", "within", "outside", "inside", "around", "throughout", "toward", "towards",
+];
+
+fn walk(t: &Node, start: usize, sentence: usize, subject: bool, locative: bool, out: &mut Vec<Mention>) {
     let kids = match t {
         Node::Leaf(..) => return,
         Node::Phrase(_, kids) => kids,
@@ -178,13 +186,17 @@ fn walk(t: &Node, start: usize, sentence: usize, subject: bool, out: &mut Vec<Me
     let label = top_label(t);
     let is_np = label == "NP" || label == "WHNP" || label == "NML";
     let is_clause = matches!(label, "S" | "SINV" | "SQ" | "SBAR" | "" | "TOP");
+    // the NP right after a preposition of place
+    let place_pp = label == "PP"
+        && matches!(kids.first(), Some(Node::Leaf(t, w)) if (t == "IN" || t == "TO") && PLACE_PREPOSITIONS.contains(&w.to_lowercase().as_str()));
 
     if is_np {
         // A base NP contains no NP of its own (PPs and clauses attached
         // below it are fine, they are not part of what is named).
         let has_np_child = kids.iter().any(|k| matches!(top_label(k), "NP" | "NML"));
         if !has_np_child {
-            if let Some(m) = base_np(t, start, sentence, subject) {
+            if let Some(mut m) = base_np(t, start, sentence, subject) {
+                m.locative = locative;
                 out.push(m);
             }
         }
@@ -221,6 +233,7 @@ fn walk(t: &Node, start: usize, sentence: usize, subject: bool, out: &mut Vec<Me
                 }
                 let mut m = name_mention(&words, pos, sentence, subject && !coordination);
                 m.conjunct = coordination;
+                m.locative = locative;
                 out.push(m);
                 pos += words.len();
                 i = j;
@@ -229,7 +242,10 @@ fn walk(t: &Node, start: usize, sentence: usize, subject: bool, out: &mut Vec<Me
             Node::Phrase(..) => {
                 // the first NP directly under a clause is its subject
                 let child_subject = is_clause && matches!(top_label(k), "NP") && !kids[..i].iter().any(|p| top_label(p) == "NP");
-                walk(k, pos, sentence, child_subject, out);
+                // the object of a place PP, and the head NP of an NP that
+                // continues with PPs of its own ("the city of Munich")
+                let child_locative = (place_pp && i == 1 && matches!(top_label(k), "NP")) || (locative && is_np && matches!(top_label(k), "NP" | "NML"));
+                walk(k, pos, sentence, child_subject, child_locative, out);
             }
             _ => {}
         }
@@ -252,6 +268,7 @@ fn name_mention(words: &[(&str, &str)], start: usize, sentence: usize, subject: 
         subject,
         span: None,
         conjunct: false,
+        locative: false,
         candidates: Vec::new(),
     }
 }
@@ -275,6 +292,7 @@ fn pronoun(word: &str, tag: &str, pos: usize, sentence: usize, subject: bool) ->
         subject,
         span: None,
         conjunct: false,
+        locative: false,
         candidates: Vec::new(),
     }
 }
@@ -335,12 +353,16 @@ fn base_np(t: &Node, start: usize, sentence: usize, subject: bool) -> Option<Men
         subject,
         span: None,
         conjunct: false,
+        locative: false,
         candidates: Vec::new(),
     })
 }
 
 // Fill in antecedent candidates for every pronoun, looking back over the
 // mentions of this and earlier sentences (in document order).
+const FREQUENCY_WEIGHT: f32 = 1.0;
+const RECENCY_WEIGHT: f32 = 0.5;
+
 pub fn resolve(all: &mut [Mention]) {
     let snapshot: Vec<Mention> = all.to_vec();
     // genders learned from the name list and from earlier resolutions,
@@ -391,6 +413,8 @@ pub fn resolve(all: &mut [Mention]) {
                     match (want, have) {
                         (Some(w), Some(h)) if w == h => score += 2.0,
                         (Some(_), Some(_)) => continue,
+                        // "in Evanston": a place unless we know otherwise
+                        _ if c.locative => continue,
                         _ => {}
                     }
                 }
@@ -407,10 +431,16 @@ pub fn resolve(all: &mut [Mention]) {
             if c.subject {
                 score += 0.5;
             }
+            // a name mentioned several times is what the text is about
+            if c.kind == Kind::Name {
+                let times = snapshot[..i].iter().filter(|o| o.kind == Kind::Name && same_name(&o.text, &c.text)).count();
+                score += FREQUENCY_WEIGHT * (times.min(5) as f32 - 1.0);
+            }
             let distance = (m.sentence - c.sentence) as f32;
             score -= 0.5 * distance;
             if c.sentence == m.sentence && !reflexive {
-                score += 0.25;
+                // closer to the pronoun is better, within the sentence
+                score += 0.25 + RECENCY_WEIGHT * c.start as f32 / m.start.max(1) as f32;
             }
             if last_in_sentence.iter().any(|(sn, h, t)| *sn == m.sentence && h == p && *t == key) {
                 score += 1.0;
@@ -425,13 +455,13 @@ pub fn resolve(all: &mut [Mention]) {
             });
         }
         cands.sort_by(|a, b| b.score.total_cmp(&a.score));
+        // one entry per name: "Smith" after "Alice Smith" is the same person
         let mut seen: Vec<String> = Vec::new();
         cands.retain(|c| {
-            let key = c.text.to_lowercase();
-            if seen.contains(&key) {
+            if seen.iter().any(|k| k.to_lowercase() == c.text.to_lowercase() || same_name(k, &c.text)) {
                 false
             } else {
-                seen.push(key);
+                seen.push(c.text.clone());
                 true
             }
         });
@@ -654,10 +684,11 @@ mod tests {
             "(S (NP (PRP She)) (VP (VBD smiled)) (. .))",
         ]);
         let she = all.iter().find(|m| m.text == "She").unwrap();
-        assert!(she.candidates.iter().any(|c| c.text == "Smith"));
         let names: Vec<&str> = she.candidates.iter().map(|c| c.text.as_str()).collect();
+        // the two forms of Smith are merged into one candidate
+        assert_eq!(names.len(), 2, "{names:?}");
+        assert!(same_name(names[0], "Smith"));
         let g = margin(she).unwrap();
-        // the next candidate that is not Smith is "friend"
         let best = she.candidates[0].score;
         let friend = she.candidates.iter().find(|c| c.text == "friend").unwrap().score;
         assert_eq!(g, best - friend, "{names:?}");
@@ -695,6 +726,41 @@ mod tests {
             ]
         );
         assert!(m[1].conjunct && m[2].conjunct && !m[0].conjunct);
+    }
+
+    #[test]
+    fn place_names_are_not_people() {
+        let all = doc(&[
+            "(S (NP (PRP He)) (VP (VBD grew) (PRT (RP up)) (PP (IN in) (NP (NNP Evanston)))) (. .))",
+            "(S (NP (PRP$ His) (NN pottery)) (VP (VBZ is) (ADJP (JJ famous))) (. .))",
+        ]);
+        let evanston = all.iter().find(|m| m.text == "Evanston").unwrap();
+        assert!(evanston.locative);
+        let his = all.iter().find(|m| m.text == "His").unwrap();
+        assert!(his.candidates.is_empty(), "{:?}", his.candidates);
+    }
+
+    #[test]
+    fn frequent_names_and_nearby_names_rank_higher() {
+        // Smith is named twice (once as "Alice Smith"), Bob once
+        let all = doc(&[
+            "(S (NP (NNP Alice) (NNP Smith)) (VP (VBD met) (NP (NNP Carol))) (. .))",
+            "(S (NP (NNP Smith)) (VP (VBD left)) (. .))",
+            "(S (NP (NNP Carol)) (VP (VBD said) (SBAR (S (NP (PRP she)) (VP (VBD smiled))))) (. .))",
+        ]);
+        let she = all.iter().find(|m| m.text == "she").unwrap();
+        let names: Vec<&str> = she.candidates.iter().map(|c| c.text.as_str()).collect();
+        // one entry per person, Carol first: same sentence and closest
+        assert_eq!(names.len(), 2, "{names:?}");
+        assert_eq!(names[0], "Carol");
+        assert!(same_name(names[1], "Smith"));
+        let all = doc(&[
+            "(S (NP (NNP Alice)) (VP (VBD met) (NP (NNP Carol)) (PP (IN on) (NP (NNP Monday)))) (. .))",
+            "(S (NP (NNP Alice)) (VP (VBD called) (NP (NNP Dana))) (. .))",
+            "(S (NP (PRP She)) (VP (VBD smiled)) (. .))",
+        ]);
+        let she = all.iter().find(|m| m.text == "She").unwrap();
+        assert_eq!(she.candidates[0].text, "Alice");
     }
 
     #[test]
