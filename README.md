@@ -204,8 +204,10 @@ auxiliary chains, passives, verb coordination (one subject, two events),
 prepositional arguments (`prep:into`), clause arguments (`clause:because`
 points at the inner event), control ("told Alice to leave": Alice leaves;
 "wanted to leave": the subject leaves), subject relatives and reduced
-relatives (the noun is the subject of the inner event), copulas with
-their `complement`. Not handled: inversion, object relatives, ellipsis.
+relatives (the noun is the subject of the inner event), copulas and
+linking verbs with their `complement` ("became president", "got angry"),
+bare time phrases as `time` ("left yesterday", "two weeks ago"). Not
+handled: inversion, object relatives, ellipsis.
 Nothing here knows what a verb means; roles are not semantic.
 
 `--eval-skeleton FILE` scores the skeleton against the function tags of
@@ -215,12 +217,11 @@ from our parses and from the gold trees themselves, so that parse errors
 and rule errors can be told apart. Takes the same files as `--eval`.
 
 On section 23 (2416 sentences) with benepar_en3, (verb, subject) pairs
-score P 72.2 / R 83.5 / F1 77.4 from our parses and 74.5 / 85.3 / 79.6
-from the gold trees; (verb, object) pairs 77.2 / 92.8 / 84.3 and 79.2 /
-94.5 / 86.2. Parsing costs about two points; the rest is the rules. The
-precision gap is mostly by design: the rules fill in controlled subjects
-the treebank leaves empty, and count temporal and predicative noun
-phrases ("left yesterday", "became president") as objects.
+score P 72.4 / R 83.5 / F1 77.5 from our parses and 74.7 / 85.3 / 79.7
+from the gold trees; (verb, object) pairs 82.6 / 92.0 / 87.1 and 84.9 /
+93.6 / 89.0. Parsing costs about two points; the rest is the rules. The
+subject precision gap is mostly by design: the rules fill in controlled
+subjects that the treebank leaves empty.
 
 ## Hyphenated compounds
 
