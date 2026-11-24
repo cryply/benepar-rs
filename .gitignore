@@ -5,3 +5,4 @@
 *.bin.part
 spiece.model
 llm-cache/
+*.jsonl

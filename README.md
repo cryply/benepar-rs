@@ -67,8 +67,11 @@ He [Bob] read it [the report] and told her [Alice] that it [the report] was too 
 
 The rules: number agreement; names for he/she, descriptions for it;
 gender from a small list of common first names, plus whatever earlier
-pronouns in the same text already implied; a preference for subjects and
-for recent mentions; reflexives bind in their own sentence. `--mentions`
+pronouns in the same text already implied; a preference for subjects, for
+names mentioned several times (what the text is about) and for mentions
+close to the pronoun; a name after a preposition of place ("in Evanston")
+is not a person unless its gender is known; forms of one name ("Smith",
+"Alice Smith") are one candidate; reflexives bind in their own sentence. `--mentions`
 also prints an entity index: each name or description with the sentences
 it occurs in, counting sentences that reach it through a pronoun. This is
 the hook for indexing notes by what they mention. It is a baseline, not a
@@ -138,10 +141,10 @@ names. It also prints how many free predictions are kept, and how many of
 them are right, at several margins, and how many gold names occur only
 after the pronoun (the rules look back only).
 
-On gap-development (2000 examples) with benepar_en3: restricted F1 60.9
-overall (M 60.8, F 60.9), free F1 53.5 (precision 62.2, recall 46.9). The
+On gap-development (2000 examples) with benepar_en3: restricted F1 63.2
+overall (M 64.1, F 62.2), free F1 57.3 (precision 65.0, recall 51.3). The
 margin separates right from wrong answers only weakly: precision goes from
-62.2 with every prediction kept to 67.7 at margin 2.0, where 24% of the
+65.0 with every prediction kept to 72.2 at margin 2.0, where 31% of the
 examples keep a prediction. 353 of the 1799 gold names occur after the
 pronoun.
 
