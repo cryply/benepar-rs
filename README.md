@@ -75,6 +75,41 @@ the hook for indexing notes by what they mention. It is a baseline, not a
 coreference system: no world knowledge, no plural-to-group matching, no
 "the company" = "Acme".
 
+Every mention and candidate in `--mentions` output carries `span`, its
+byte offsets in the input text. Possessives inside a longer noun phrase
+("his support") are pronoun mentions of their own.
+
+A pronoun's margin is how far its best antecedent scores ahead of the next
+candidate that is not the same name ("Smith" and "Alice Smith" count as
+one). `--canonical --min-margin X` leaves pronouns with a margin below X
+without a bracket.
+
+### Scoring on GAP
+
+`--gap FILE` scores the pronoun rules on GAP (Webster et al., TACL 2018,
+https://github.com/google-research-datasets/gap-coreference, Apache 2.0):
+Wikipedia snippets with one pronoun and two names, each labeled as the
+antecedent or not. The data is not part of this repository.
+
+```
+$ curl -LO https://raw.githubusercontent.com/google-research-datasets/gap-coreference/master/gap-development.tsv
+$ benepar-rs --model ./benepar_en3 --gap gap-development.tsv --threads 8
+```
+
+It prints F1 for masculine and feminine pronouns, their ratio and the
+overall F1, in two readings of the candidate list: `free` takes only the
+best candidate, `restricted` the best candidate that is one of the two
+names. It also prints how many free predictions are kept, and how many of
+them are right, at several margins, and how many gold names occur only
+after the pronoun (the rules look back only).
+
+On gap-development (2000 examples) with benepar_en3: restricted F1 60.8
+overall (M 60.6, F 60.9), free F1 53.4 (precision 62.2, recall 46.9). The
+margin separates right from wrong answers only weakly: precision goes from
+62.2 with every prediction kept to 67.7 at margin 2.0, where 24% of the
+examples keep a prediction. 353 of the 1799 gold names occur after the
+pronoun.
+
 ## Hyphenated compounds
 
 `--compounds` lists the hyphenated words of every sentence with their parts

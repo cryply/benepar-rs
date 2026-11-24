@@ -1,4 +1,4 @@
-use benepar_rs::{mentions, model, text, treebank};
+use benepar_rs::{gap, mentions, model, text, treebank};
 use anyhow::{Context, Result};
 use clap::Parser as _;
 use std::io::Read;
@@ -24,7 +24,12 @@ struct Args {
     /// files and print EVALB-style precision, recall and F1
     #[arg(long, value_name = "FILE")]
     eval: Option<PathBuf>,
-    /// With --eval: stop after this many sentences
+    /// Score the pronoun rules on a GAP .tsv file (gap-development.tsv,
+    /// gap-test.tsv) and print GAP F1 by gender, plus precision by margin
+    #[arg(long, value_name = "FILE")]
+    gap: Option<PathBuf>,
+    /// With --eval: stop after this many sentences; with --gap: after this
+    /// many examples
     #[arg(long)]
     limit: Option<usize>,
     /// Print one JSON object per sentence instead of bracketed trees
@@ -41,6 +46,10 @@ struct Args {
     /// antecedent in brackets
     #[arg(long)]
     canonical: bool,
+    /// With --canonical: annotate a pronoun only if its best antecedent is
+    /// at least this far ahead of the next one that is not the same name
+    #[arg(long, default_value_t = 0.0)]
+    min_margin: f32,
     /// Print the hyphenated compounds of every sentence as JSON: parts,
     /// tags, pattern and the role of the left part
     #[arg(long)]
@@ -119,6 +128,51 @@ fn evaluate(parser: &mut model::Parser, file: &std::path::Path, limit: Option<us
     Ok(())
 }
 
+fn evaluate_gap(parser: &mut model::Parser, file: &std::path::Path, args: &Args) -> Result<()> {
+    let data = std::fs::read_to_string(file).with_context(|| format!("reading {}", file.display()))?;
+    let mut examples = gap::parse_tsv(&data)?;
+    if let Some(l) = args.limit {
+        examples.truncate(l);
+    }
+    let split = |t: &str| if args.keep_hyphens { text::sentences_keep_hyphens(t) } else { text::sentences(t) };
+    // All sentences of all examples go through the parser together so
+    // that --threads helps; `ranges` maps them back.
+    let mut sents = Vec::new();
+    let mut ranges = Vec::new();
+    for ex in &examples {
+        let s = split(&ex.text);
+        ranges.push(sents.len()..sents.len() + s.len());
+        sents.extend(s);
+    }
+    let started = std::time::Instant::now();
+    let parses = parser.parse_sentences_lenient(&sents, 1, 1, args.threads);
+    let mut report = gap::Report::default();
+    let mut failed = 0usize;
+    for (ex, range) in examples.iter().zip(ranges) {
+        let mut all = Vec::new();
+        let mut ok = true;
+        for (i, r) in parses[range.clone()].iter().enumerate() {
+            match r {
+                Ok(p) => all.extend(mentions::mentions(&p.trees[0].1, i)),
+                Err(e) => {
+                    eprintln!("{}: {e}", ex.id);
+                    ok = false;
+                }
+            }
+        }
+        if !ok {
+            failed += 1;
+        }
+        mentions::resolve(&mut all);
+        mentions::attach_spans(&mut all, &text::offsets(&ex.text, &sents[range]));
+        report.add(ex, &gap::predict(ex, &all));
+    }
+    report.print();
+    println!("parse errors  {failed}");
+    println!("time          {:.1} s", started.elapsed().as_secs_f64());
+    Ok(())
+}
+
 fn prepare_weights(dir: &std::path::Path) -> Result<()> {
     let bin = dir.join("benepar_model.bin");
     let bz2 = dir.join("benepar_model.bin.bz2");
@@ -141,6 +195,10 @@ fn main() -> Result<()> {
         let mut parser = model::Parser::load(&args.model).context("loading model")?;
         return evaluate(&mut parser, file, args.limit, args.threads);
     }
+    if let Some(file) = &args.gap {
+        let mut parser = model::Parser::load(&args.model).context("loading model")?;
+        return evaluate_gap(&mut parser, file, &args);
+    }
     let text = match args.text {
         Some(t) => t,
         None => {
@@ -158,9 +216,10 @@ fn main() -> Result<()> {
             all.extend(mentions::mentions(&p.trees[0].1, i));
         }
         mentions::resolve(&mut all);
+        mentions::attach_spans(&mut all, &text::offsets(&text, &sents));
         if args.canonical {
             let words: Vec<Vec<String>> = parses.iter().map(|p| p.words.clone()).collect();
-            for line in mentions::annotate(&words, &all) {
+            for line in mentions::annotate(&words, &all, args.min_margin) {
                 println!("{line}");
             }
         }

@@ -10,6 +10,7 @@
 
 pub mod chart;
 pub mod compounds;
+pub mod gap;
 pub mod mentions;
 pub mod model;
 #[allow(dead_code)]
