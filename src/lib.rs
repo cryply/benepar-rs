@@ -13,6 +13,7 @@ pub mod compounds;
 pub mod gap;
 pub mod mentions;
 pub mod model;
+pub mod pronominalize;
 #[allow(dead_code)]
 pub mod spm;
 #[allow(dead_code)]
