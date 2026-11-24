@@ -107,6 +107,57 @@ fn is_copula(w: &str) -> bool {
     matches!(w.to_lowercase().as_str(), "be" | "am" | "is" | "are" | "was" | "were" | "been" | "being" | "'s" | "'re" | "'m")
 }
 
+fn stem(w: &str) -> String {
+    let w = w.to_lowercase();
+    for suffix in ["ing", "ed", "es", "s"] {
+        if let Some(s) = w.strip_suffix(suffix).filter(|s| s.len() >= 3) {
+            return s.to_string();
+        }
+    }
+    w
+}
+
+// Verbs whose noun phrase is a predicate about the subject, not an
+// object: "became president", "remained a mystery", "seems a fool".
+fn links_np(w: &str) -> bool {
+    matches!(stem(w).as_str(), "becom" | "become" | "became" | "remain" | "seem" | "appear" | "stay")
+}
+
+// Verbs whose adjective phrase is a predicate about the subject: the
+// above plus "felt odd", "looked tired", "got angry", "turned red".
+fn links_adjp(w: &str) -> bool {
+    links_np(w) || matches!(stem(w).as_str(), "feel" | "felt" | "look" | "sound" | "turn" | "prov" | "prove" | "grow" | "grew" | "grown" | "get" | "got" | "gotten" | "smell" | "taste")
+}
+
+const TIME_WORDS: &[&str] = &[
+    "yesterday", "today", "tomorrow", "tonight", "now", "then", "year", "years", "month", "months", "week", "weeks", "day", "days",
+    "hour", "hours", "minute", "minutes", "night", "nights", "morning", "evening", "afternoon", "quarter", "decade", "decades", "century",
+    "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday", "january", "february", "march", "april", "may", "june",
+    "july", "august", "september", "october", "november", "december", "ago", "time", "times", "season", "spring", "summer", "fall", "winter",
+    "moment", "period", "weekend",
+];
+
+const TIME_ADVERBS: &[&str] = &[
+    "yesterday", "today", "tomorrow", "tonight", "now", "then", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
+];
+
+// A bare noun phrase that tells when: "yesterday", "last year", "two
+// weeks ago", "every Monday". "the day" and "a year" are things ("spent
+// the day"), unless they end in "ago".
+fn is_temporal(np: &Node, head: usize, start: usize) -> bool {
+    let mut w = Vec::new();
+    words(np, &mut w);
+    let (tag, word) = &w[head - start];
+    let word = word.to_lowercase();
+    let first = w.first().map(|(_, x)| x.to_lowercase()).unwrap_or_default();
+    let last = w.last().map(|(_, x)| x.to_lowercase()).unwrap_or_default();
+    if last == "ago" || TIME_ADVERBS.contains(&word.as_str()) {
+        return true;
+    }
+    let article = matches!(first.as_str(), "the" | "a" | "an");
+    (tag.starts_with("NN") || tag == "CD") && !article && TIME_WORDS.contains(&word.as_str())
+}
+
 /// Index of the head word of a noun phrase: the last noun before any PP,
 /// clause or punctuation; otherwise the last word of the first base NP.
 pub fn np_head(t: &Node, start: usize) -> usize {
@@ -310,9 +361,15 @@ impl Builder<'_> {
             for c in kids(g.vp) {
                 match label(c) {
                     "NP" => {
-                        let role = if copula { "complement" } else { "object" };
-                        args.push(self.arg(role, c, pos));
-                        nps += 1;
+                        let mut a = self.arg("object", c, pos);
+                        if is_temporal(c, a.head, pos) {
+                            a.role = "time".to_string();
+                        } else if copula || links_np(&word) {
+                            a.role = "complement".to_string();
+                        } else {
+                            nps += 1;
+                        }
+                        args.push(a);
                     }
                     "PP" => {
                         if let Some((prep, np, off)) = pp_parts(c) {
@@ -320,7 +377,7 @@ impl Builder<'_> {
                             args.push(self.arg(&role, np, pos + off));
                         }
                     }
-                    "ADJP" if copula => args.push(self.arg("complement", c, pos)),
+                    "ADJP" if copula || links_adjp(&word) => args.push(self.arg("complement", c, pos)),
                     "S" | "SBAR" | "SQ" | "SINV" => {
                         // the inner clause's subject when it has none: the
                         // object if there is one, else our subject
@@ -338,7 +395,7 @@ impl Builder<'_> {
                 pos += size(c);
             }
             // two bare objects: the first is the indirect one
-            if let (2, false, Some(a)) = (nps, copula, args.iter_mut().find(|a| a.role == "object")) {
+            if let (2, Some(a)) = (nps, args.iter_mut().find(|a| a.role == "object")) {
                 a.role = "indirect".to_string();
             }
             if let Some(mut s) = subject.clone() {
@@ -756,6 +813,20 @@ mod tests {
         let t = crate::tree::Node::Phrase("S::VP".into(), vec![crate::tree::Node::leaf("VB", "Go"), crate::tree::Node::leaf(".", ".")]);
         let e = events(&t, 0, &[]);
         assert_eq!(lines(&e), vec!["e1 Go"]);
+    }
+
+    #[test]
+    fn time_phrases_and_linking_verbs() {
+        let l = run("(S (NP (PRP She)) (VP (VBD left) (NP (NN yesterday))) (. .))");
+        assert_eq!(l, vec!["e1 left  subject=She  time=yesterday"]);
+        let l = run("(S (NP (PRP He)) (VP (VBD became) (NP (NN president)) (NP (JJ last) (NN year))) (. .))");
+        assert_eq!(l, vec!["e1 became  subject=He  complement=president  time=last year"]);
+        let l = run("(S (NP (PRP He)) (VP (VBD spent) (NP (DT the) (NN day)) (NP (JJ last) (NN week))) (. .))");
+        assert_eq!(l, vec!["e1 spent  subject=He  object=the day  time=last week"]);
+        let l = run("(S (NP (PRP It)) (VP (VBD seemed) (ADJP (JJ odd))) (. .))");
+        assert_eq!(l, vec!["e1 seemed  subject=It  complement=odd"]);
+        let l = run("(S (NP (PRP He)) (VP (VP (VBD got) (NP (DT the) (NN report))) (CC and) (VP (VBD got) (ADJP (JJ angry)))) (. .))");
+        assert_eq!(l, vec!["e1 got  subject=He  object=the report", "e2 got  subject=He  complement=angry"]);
     }
 
     #[test]
