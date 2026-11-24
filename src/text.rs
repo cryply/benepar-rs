@@ -267,9 +267,62 @@ pub fn sentences_keep_hyphens(text: &str) -> Vec<Sentence> {
     out
 }
 
+/// Byte span of every word in `text`, per sentence, for sentences made from
+/// that text by `sentences` or `sentences_keep_hyphens`. Words are found in
+/// order; a word changed by `normalize_word` (curly quotes, a long dash)
+/// covers the one character it came from.
+pub fn offsets(text: &str, sents: &[Sentence]) -> Vec<Vec<(usize, usize)>> {
+    let mut cur = 0;
+    let mut out = Vec::new();
+    for s in sents {
+        let mut spans = Vec::new();
+        for w in &s.words {
+            while let Some(c) = text[cur..].chars().next() {
+                if !c.is_whitespace() {
+                    break;
+                }
+                cur += c.len_utf8();
+            }
+            let rest = &text[cur..];
+            let len = if rest.starts_with(w.as_str()) {
+                w.len()
+            } else {
+                match rest.chars().next() {
+                    Some(c) if normalize_word(&c.to_string()) == *w => c.len_utf8(),
+                    _ => match rest.find(w.as_str()) {
+                        Some(i) => {
+                            cur += i;
+                            w.len()
+                        }
+                        None => 0,
+                    },
+                }
+            };
+            spans.push((cur, cur + len));
+            cur += len;
+        }
+        out.push(spans);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn offsets_point_back_into_the_text() {
+        let text = "Alice\u{2019}s owner-run firm said \u{201c}no\u{201d}. He cannot go.";
+        let sents = sentences(text);
+        let offs = offsets(text, &sents);
+        for (s, o) in sents.iter().zip(&offs) {
+            for (w, &(a, b)) in s.words.iter().zip(o) {
+                let orig = &text[a..b];
+                assert!(orig == w || normalize_word(orig) == *w, "{w:?} vs {orig:?}");
+            }
+        }
+        assert_eq!(&text[offs[1][1].0..offs[1][1].1], "can");
+    }
 
     fn words(text: &str) -> Vec<Vec<String>> {
         sentences(text).into_iter().map(|s| s.words).collect()

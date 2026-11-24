@@ -40,6 +40,9 @@ pub struct Mention {
     pub head: String,
     pub number: Number,
     pub subject: bool,
+    // byte span in the original text, once attach_spans has run
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub span: Option<(usize, usize)>,
     // for pronouns: ranked antecedent candidates, best first
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub candidates: Vec<Candidate>,
@@ -52,6 +55,8 @@ pub struct Candidate {
     pub end: usize,
     pub text: String,
     pub score: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub span: Option<(usize, usize)>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -188,7 +193,9 @@ fn walk(t: &Node, start: usize, sentence: usize, subject: bool, out: &mut Vec<Me
         let k = &kids[i];
         let n = count_leaves(k);
         match k {
-            Node::Leaf(tag, word) if is_pronoun_tag(tag) && !is_np => {
+            // a possessive inside a longer NP ("his support") is a mention
+            // of its own as well
+            Node::Leaf(tag, word) if is_pronoun_tag(tag) && (!is_np || (tag == "PRP$" && kids.len() > 1)) => {
                 out.push(pronoun(word, tag, pos, sentence, subject));
             }
             Node::Leaf(tag, _) if is_name_tag(tag) && !is_np => {
@@ -234,6 +241,7 @@ fn name_mention(words: &[(&str, &str)], start: usize, sentence: usize, subject: 
         head: text.last().copied().unwrap_or("").to_string(),
         number: if plural { Number::Plural } else { Number::Singular },
         subject,
+        span: None,
         candidates: Vec::new(),
     }
 }
@@ -255,6 +263,7 @@ fn pronoun(word: &str, tag: &str, pos: usize, sentence: usize, subject: bool) ->
         head: lower,
         number,
         subject,
+        span: None,
         candidates: Vec::new(),
     }
 }
@@ -312,6 +321,7 @@ fn base_np(t: &Node, start: usize, sentence: usize, subject: bool) -> Option<Men
         head: head.word.to_lowercase(),
         number,
         subject,
+        span: None,
         candidates: Vec::new(),
     })
 }
@@ -398,6 +408,7 @@ pub fn resolve(all: &mut [Mention]) {
                 end: c.end,
                 text: c.text.clone(),
                 score,
+                span: c.span,
             });
         }
         cands.sort_by(|a, b| b.score.total_cmp(&a.score));
@@ -433,13 +444,60 @@ fn join_words<S: AsRef<str>>(words: &[S]) -> String {
     words.join(" ").replace(" - ", "-")
 }
 
+// Byte spans for every mention and candidate, from the word spans of each
+// sentence (as text::offsets gives them).
+pub fn attach_spans(all: &mut [Mention], offsets: &[Vec<(usize, usize)>]) {
+    let span = |sentence: usize, start: usize, end: usize| -> Option<(usize, usize)> {
+        let words = offsets.get(sentence)?;
+        Some((words.get(start)?.0, words.get(end.checked_sub(1)?)?.1))
+    };
+    for m in all.iter_mut() {
+        m.span = span(m.sentence, m.start, m.end);
+        for c in m.candidates.iter_mut() {
+            c.span = span(c.sentence, c.start, c.end);
+        }
+    }
+}
+
+const NOT_NAME_WORDS: &[&str] = &["the", "a", "an", "this", "that", "these", "those", "mr", "mrs", "ms", "dr", "prof"];
+
+fn name_words(text: &str) -> Vec<String> {
+    text.split(|c: char| c.is_whitespace() || c == '-')
+        .filter(|w| w.chars().next().is_some_and(|c| c.is_uppercase()))
+        .map(|w| w.trim_matches('.').to_lowercase())
+        .filter(|w| !w.is_empty() && !NOT_NAME_WORDS.contains(&w.as_str()))
+        .collect()
+}
+
+/// Do two mention texts look like the same name: they share a capitalized
+/// word ("Alice Smith" and "Smith", "Mrs. Smith" and "Alice Smith").
+pub fn same_name(a: &str, b: &str) -> bool {
+    let wa = name_words(a);
+    let wb = name_words(b);
+    wa.iter().any(|w| wb.contains(w))
+}
+
+/// How far the best candidate of a pronoun is ahead of the next one that
+/// is not the same name. None without candidates, infinite with one.
+pub fn margin(m: &Mention) -> Option<f32> {
+    let best = m.candidates.first()?;
+    let next = m.candidates[1..]
+        .iter()
+        .find(|c| !same_name(&c.text, &best.text) && c.text.to_lowercase() != best.text.to_lowercase());
+    Some(next.map_or(f32::INFINITY, |c| best.score - c.score))
+}
+
 // Words of every sentence with each resolved pronoun followed by its best
-// antecedent in brackets: "she [Alice] would call him [Bob]".
-pub fn annotate(sentences: &[Vec<String>], all: &[Mention]) -> Vec<String> {
+// antecedent in brackets: "she [Alice] would call him [Bob]". Pronouns whose
+// margin is below `min_margin` are left as they are.
+pub fn annotate(sentences: &[Vec<String>], all: &[Mention], min_margin: f32) -> Vec<String> {
     let mut out = Vec::new();
     for (si, words) in sentences.iter().enumerate() {
         let mut pieces: Vec<String> = words.clone();
         for m in all.iter().filter(|m| m.sentence == si && m.kind == Kind::Pronoun) {
+            if margin(m).is_none_or(|g| g < min_margin) {
+                continue;
+            }
             if let Some(c) = m.candidates.first() {
                 if c.text.to_lowercase() != m.text.to_lowercase() {
                     pieces[m.start] = format!("{} [{}]", words[m.start], c.text);
@@ -538,11 +596,28 @@ mod tests {
             .iter()
             .map(|t| crate::treebank::leaves(&parse(t).unwrap()).into_iter().map(|(_, w)| w).collect())
             .collect();
-        let ann = annotate(&words, &all);
+        let ann = annotate(&words, &all, 0.0);
         assert_eq!(ann[1], "They [The engineers] liked it [the report] .");
+        // each pronoun has one candidate, so any threshold keeps them
+        let strict = annotate(&words, &all, 100.0);
+        assert_eq!(strict, ann);
         let ents = entities(&all);
         let report = ents.iter().find(|(k, _)| k == "the report").unwrap();
         assert_eq!(report.1, vec![0, 1]);
+        let trees2 = [
+            "(S (NP (DT The) (NN engineer)) (VP (VBD read) (NP (DT the) (NN report))) (. .))",
+            "(S (NP (PRP It)) (VP (VBD was) (ADJP (JJ long))) (. .))",
+        ];
+        let all2 = doc(&trees2);
+        let it = all2.iter().find(|m| m.text == "It").unwrap();
+        assert_eq!(it.candidates.len(), 2);
+        let g = margin(it).unwrap();
+        assert!(g > 0.0 && g < 1.0, "{g}");
+        let words2: Vec<Vec<String>> = trees2
+            .iter()
+            .map(|t| crate::treebank::leaves(&parse(t).unwrap()).into_iter().map(|(_, w)| w).collect())
+            .collect();
+        assert_eq!(annotate(&words2, &all2, 1.0)[1], "It was long .");
     }
 
     #[test]
@@ -556,6 +631,38 @@ mod tests {
         assert_eq!(he.candidates[0].text, "Zorblax");
         let she = all.iter().find(|m| m.text == "She").unwrap();
         assert_eq!(she.candidates[0].text, "Quendra");
+    }
+
+    #[test]
+    fn margin_ignores_other_forms_of_the_same_name() {
+        let all = doc(&[
+            "(S (NP (NNP Alice) (NNP Smith)) (VP (VBD met) (NP (NN friend))) (. .))",
+            "(S (NP (NNP Smith)) (VP (VBD left)) (. .))",
+            "(S (NP (PRP She)) (VP (VBD smiled)) (. .))",
+        ]);
+        let she = all.iter().find(|m| m.text == "She").unwrap();
+        assert!(she.candidates.iter().any(|c| c.text == "Smith"));
+        let names: Vec<&str> = she.candidates.iter().map(|c| c.text.as_str()).collect();
+        let g = margin(she).unwrap();
+        // the next candidate that is not Smith is "friend"
+        let best = she.candidates[0].score;
+        let friend = she.candidates.iter().find(|c| c.text == "friend").unwrap().score;
+        assert_eq!(g, best - friend, "{names:?}");
+        assert!(same_name("Mrs. Smith", "Alice Smith"));
+        assert!(!same_name("The report", "the Report card"));
+    }
+
+    #[test]
+    fn spans_come_from_word_offsets() {
+        let mut all = doc(&[
+            "(S (NP (NNP Alice)) (VP (VBD left)) (. .))",
+            "(S (NP (PRP She)) (VP (VBD smiled)) (. .))",
+        ]);
+        let offs = vec![vec![(0, 5), (6, 10), (10, 11)], vec![(12, 15), (16, 22), (22, 23)]];
+        attach_spans(&mut all, &offs);
+        let she = all.iter().find(|m| m.text == "She").unwrap();
+        assert_eq!(she.span, Some((12, 15)));
+        assert_eq!(she.candidates[0].span, Some((0, 5)));
     }
 
     #[test]
