@@ -51,18 +51,8 @@ impl Rewrite {
 
 const DETERMINERS: &[&str] = &["the", "a", "an", "this", "that", "these", "those"];
 
-// Common nouns for people: a singular one cannot become "it", and its
-// gender is not known.
-const PERSON_NOUNS: &[&str] = &[
-    "man", "woman", "boy", "girl", "child", "kid", "baby", "person", "wife", "husband", "mother",
-    "father", "son", "daughter", "brother", "sister", "friend", "king", "queen", "lady", "guy",
-    "president", "student", "assistant", "agent", "parent", "resident", "client", "patient",
-    "chief", "boss", "colleague", "chef", "judge", "pilot", "nurse", "spouse", "partner", "author",
-];
-
 fn person_like(head: &str) -> bool {
-    PERSON_NOUNS.contains(&head)
-        || ["er", "or", "ist", "ian", "ess"].iter().any(|s| head.len() > s.len() + 2 && head.ends_with(s))
+    mentions::is_person_noun(head)
 }
 
 fn description_key(text: &str) -> String {
@@ -101,6 +91,7 @@ pub(crate) fn group(all: &[Mention], entities: &mut Vec<Entity>) -> Vec<Option<u
                     .filter(|&e| {
                         entities[e].number == m.number
                             && entities[e].names.iter().any(|n| subset(&words, n) || subset(n, &words))
+                            && mentions::same_name(&entities[e].first, &m.text)
                     })
                     .collect();
                 match hits.len() {

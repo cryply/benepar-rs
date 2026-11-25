@@ -153,6 +153,7 @@ pub fn entities(trees: &[Node], all: &[Mention], events: &[Vec<Event>]) -> Vec<E
     let mut groups = Vec::new();
     let mut of = pronominalize::group(all, &mut groups);
     pronominalize::learn_genders(all, &of, &mut groups);
+    link_titles(all, &mut of, &groups);
     // pronouns join their best antecedent's entity
     for (i, m) in all.iter().enumerate() {
         if m.kind != Kind::Pronoun {
@@ -244,6 +245,51 @@ pub fn entities(trees: &[Node], all: &[Mention], events: &[Vec<Event>]) -> Vec<E
     out
 }
 
+// "the Doctor" is the one person with the title Dr., "the Governor" the
+// one with Governor: definite descriptions whose head is a title word join
+// that name's entity when exactly one name carries the title.
+fn link_titles(all: &[Mention], of: &mut [Option<usize>], groups: &[pronominalize::Entity]) {
+    let title_key = |w: &str| -> String {
+        let w = w.trim_end_matches('.').to_lowercase();
+        match w.as_str() {
+            "dr" | "doctor" => "doctor".to_string(),
+            "prof" | "professor" => "professor".to_string(),
+            "rev" | "reverend" => "reverend".to_string(),
+            "rep" | "representative" => "representative".to_string(),
+            _ => w,
+        }
+    };
+    // title -> entities whose first mention carries it
+    let mut carriers: Vec<(String, usize)> = Vec::new();
+    for (e, g) in groups.iter().enumerate() {
+        // a bare "Doctor" in address is not a name carrying a title
+        if g.key.is_some() || g.first.split_whitespace().count() < 2 {
+            continue;
+        }
+        for w in g.first.split_whitespace() {
+            let k = title_key(w);
+            if TITLES.contains(&k.as_str()) || k == "doctor" || k == "professor" {
+                carriers.push((k, e));
+            }
+        }
+    }
+    for (i, m) in all.iter().enumerate() {
+        if m.kind != Kind::Nominal || m.number != Number::Singular {
+            continue;
+        }
+        let lower = m.text.to_lowercase();
+        if !lower.starts_with("the ") || lower.split_whitespace().count() != 2 {
+            continue;
+        }
+        let k = title_key(&m.head);
+        let mut hits = carriers.iter().filter(|(t, _)| *t == k).map(|(_, e)| *e).collect::<Vec<_>>();
+        hits.dedup();
+        if hits.len() == 1 {
+            of[i] = Some(hits[0]);
+        }
+    }
+}
+
 // Mentions of one sentence are numbered from 0 in the skeleton; `all`
 // holds every sentence's mentions in order.
 fn index_in_all(all: &[Mention], sentence: usize, within: usize) -> Option<usize> {
@@ -305,6 +351,17 @@ mod tests {
         assert_eq!(l[1], "#1 the red-haired engineer (the engineer)  [modifier:red-haired; head:engineer]  {object of met, object of thanked}");
         assert_eq!(e[0].mentions[2].kind, Kind::Pronoun);
         assert!(e[0].mentions[2].margin.is_some());
+    }
+
+    #[test]
+    fn the_doctor_is_the_one_with_the_title() {
+        let e = run(&[
+            "(S (NP (NNP Dr.) (NNP Roylott)) (VP (VBD kept) (NP (DT a) (NN cheetah))) (. .))",
+            "(S (NP (DT The) (NN doctor)) (VP (VBD smiled)) (. .))",
+        ]);
+        let r = e.iter().find(|x| x.name == "Dr. Roylott").unwrap();
+        assert!(r.mentions.iter().any(|m| m.text == "The doctor"));
+        assert!(r.roles.iter().any(|x| x.verb == "smiled"));
     }
 
     #[test]

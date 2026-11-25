@@ -179,12 +179,35 @@ fn render(cond: &str, p: &Prepared, character: &str, min_margin: f32, alternativ
                 for d in &ent.descriptors {
                     s.push_str(&format!("{}: {}\n", d.source, d.text));
                 }
+                // every mention of every entity, so that pronouns in events
+                // can be written as the names they stand for
+                let mut name_at: std::collections::HashMap<(usize, usize, usize), &str> = std::collections::HashMap::new();
+                for e in &ents {
+                    for m in &e.mentions {
+                        if m.kind == Kind::Pronoun {
+                            name_at.insert((m.sentence, m.start, m.end), &e.name);
+                        }
+                    }
+                }
                 s.push_str("Events:\n");
+                let mut seen = std::collections::HashSet::new();
                 for r in &ent.roles {
+                    if !seen.insert((r.sentence, r.event)) {
+                        continue;
+                    }
                     let ev = &p.events[r.sentence][r.event];
-                    let line = skeleton::lines(std::slice::from_ref(ev)).remove(0);
-                    // "e1 " prefix is meaningless here
-                    s.push_str(&format!("s{} {}\n", r.sentence, line.trim_start_matches("e1 ")));
+                    let mut line = ev.word.clone();
+                    if !ev.aux.is_empty() {
+                        line.push_str(&format!(" [{}]", ev.aux.join(" ")));
+                    }
+                    if ev.negated {
+                        line.push_str(" not");
+                    }
+                    for a in &ev.args {
+                        let text = name_at.get(&(r.sentence, a.start, a.end)).map_or(a.text.as_str(), |n| n);
+                        line.push_str(&format!("  {}={}", a.role, text));
+                    }
+                    s.push_str(&format!("s{} {}\n", r.sentence, line));
                 }
                 s
             }
@@ -196,8 +219,10 @@ fn render(cond: &str, p: &Prepared, character: &str, min_margin: f32, alternativ
 fn extract_prompt(text: &str, character: &str) -> String {
     format!(
         "Below is a text, or notes extracted from it. List every fact it gives about {character}: \
-who they are, what they did, where, with whom, what they are like. One fact per line, short, \
-no numbering, no commentary. Only what the text says.\n\n{text}"
+who they are, their past, family, money, what they did, where, with whom, what they look like, \
+what they are like, what they own, what happens to them. Be exhaustive: small details count, and a \
+long list is better than a short one. One fact per line, short, no numbering, no commentary. Only \
+what the text says.\n\n{text}"
     )
 }
 
