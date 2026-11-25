@@ -837,6 +837,13 @@ mod tests {
         let obj = e[0].args.iter().find(|a| a.role == "object").unwrap();
         assert_eq!((obj.start, obj.end, obj.head), (3, 8, 4));
         assert_eq!(m[obj.mention.unwrap()].text, "the report");
+        // a possessor is not the argument: "Smith's chamber was large"
+        let t = parse("(S (NP (NP (NNP Smith) (POS 's)) (NN chamber)) (VP (VBD was) (ADJP (JJ large))) (. .))").unwrap();
+        let m = mentions(&t, 0);
+        let e = events(&t, 0, &m);
+        let subj = e[0].args.iter().find(|a| a.role == "subject").unwrap();
+        assert_eq!(m[subj.mention.unwrap()].text, "Smith's chamber");
+        assert!(m.iter().any(|x| x.text == "Smith" && !x.subject));
     }
 
     #[test]

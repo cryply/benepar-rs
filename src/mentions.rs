@@ -52,6 +52,12 @@ pub struct Mention {
     // rarely a person
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub locative: bool,
+    // possessor inside a longer phrase ("Smith" in "Smith's room")
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub possessor: bool,
+    // subject of a verb of speaking ("Holmes" in "Holmes answered")
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub speaker: bool,
     // for pronouns: ranked antecedent candidates, best first
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub candidates: Vec<Candidate>,
@@ -177,10 +183,17 @@ fn top_label(t: &Node) -> &str {
     t.labels().first().copied().unwrap_or("")
 }
 
+// An NP ending in a possessive marker: "Smith 's", "the doctor 's".
+fn is_possessor(t: &Node) -> bool {
+    let mut lv = Vec::new();
+    leaves(t, &mut lv);
+    matches!(lv.last(), Some(l) if l.tag == "POS")
+}
+
 // Mentions of one sentence. `sentence` is its index in the document.
 pub fn mentions(tree: &Node, sentence: usize) -> Vec<Mention> {
     let mut out = Vec::new();
-    walk(tree, 0, sentence, false, false, &mut out);
+    walk(tree, 0, sentence, false, false, false, &mut out);
     out.sort_by_key(|m| (m.start, std::cmp::Reverse(m.end)));
     out
 }
@@ -189,7 +202,21 @@ const PLACE_PREPOSITIONS: &[&str] = &[
     "in", "at", "near", "into", "onto", "across", "through", "within", "outside", "inside", "around", "throughout", "toward", "towards",
 ];
 
-fn walk(t: &Node, start: usize, sentence: usize, subject: bool, locative: bool, out: &mut Vec<Mention>) {
+const SPEECH_VERBS: &[&str] = &[
+    "said", "says", "say", "answered", "replied", "asked", "cried", "remarked", "observed", "continued", "added", "exclaimed",
+    "murmured", "whispered", "shouted", "returned", "explained", "inquired", "demanded", "interrupted", "muttered", "declared",
+    "announced", "told", "began", "went on", "put in", "suggested", "repeated", "called",
+];
+
+// Does the clause's verb phrase start with a verb of speaking.
+fn speech_clause(kids: &[Node]) -> bool {
+    kids.iter().any(|k| {
+        top_label(k) == "VP"
+            && matches!(k, Node::Phrase(_, vk) if matches!(vk.first(), Some(Node::Leaf(t, w)) if t.starts_with("VB") && SPEECH_VERBS.contains(&w.to_lowercase().as_str())))
+    })
+}
+
+fn walk(t: &Node, start: usize, sentence: usize, subject: bool, locative: bool, speaker: bool, out: &mut Vec<Mention>) {
     let kids = match t {
         Node::Leaf(..) => return,
         Node::Phrase(_, kids) => kids,
@@ -197,17 +224,23 @@ fn walk(t: &Node, start: usize, sentence: usize, subject: bool, locative: bool, 
     let label = top_label(t);
     let is_np = label == "NP" || label == "WHNP" || label == "NML";
     let is_clause = matches!(label, "S" | "SINV" | "SQ" | "SBAR" | "" | "TOP");
+    let is_speech = is_clause && speech_clause(kids);
     // the NP right after a preposition of place
     let place_pp = label == "PP"
         && matches!(kids.first(), Some(Node::Leaf(t, w)) if (t == "IN" || t == "TO") && PLACE_PREPOSITIONS.contains(&w.to_lowercase().as_str()));
 
     if is_np {
         // A base NP contains no NP of its own (PPs and clauses attached
-        // below it are fine, they are not part of what is named).
-        let has_np_child = kids.iter().any(|k| matches!(top_label(k), "NP" | "NML"));
+        // below it are fine, they are not part of what is named). A
+        // possessor NP ("Smith's chamber") does not count: the whole
+        // phrase is what is named, and the possessor is a mention of its
+        // own below.
+        let has_np_child = kids.iter().any(|k| matches!(top_label(k), "NP" | "NML") && !is_possessor(k));
         if !has_np_child {
             if let Some(mut m) = base_np(t, start, sentence, subject) {
                 m.locative = locative;
+                m.possessor = is_possessor(t);
+                m.speaker = speaker;
                 out.push(m);
             }
         }
@@ -256,7 +289,7 @@ fn walk(t: &Node, start: usize, sentence: usize, subject: bool, locative: bool, 
                 // the object of a place PP, and the head NP of an NP that
                 // continues with PPs of its own ("the city of Munich")
                 let child_locative = (place_pp && i == 1 && matches!(top_label(k), "NP")) || (locative && is_np && matches!(top_label(k), "NP" | "NML"));
-                walk(k, pos, sentence, child_subject, child_locative, out);
+                walk(k, pos, sentence, child_subject, child_locative, child_subject && is_speech, out);
             }
             _ => {}
         }
@@ -280,6 +313,8 @@ fn name_mention(words: &[(&str, &str)], start: usize, sentence: usize, subject: 
         span: None,
         conjunct: false,
         locative: false,
+        possessor: false,
+        speaker: false,
         candidates: Vec::new(),
     }
 }
@@ -304,6 +339,8 @@ fn pronoun(word: &str, tag: &str, pos: usize, sentence: usize, subject: bool) ->
         span: None,
         conjunct: false,
         locative: false,
+        possessor: false,
+        speaker: false,
         candidates: Vec::new(),
     }
 }
@@ -365,6 +402,8 @@ fn base_np(t: &Node, start: usize, sentence: usize, subject: bool) -> Option<Men
         span: None,
         conjunct: false,
         locative: false,
+        possessor: false,
+        speaker: false,
         candidates: Vec::new(),
     })
 }
@@ -409,6 +448,10 @@ pub(crate) fn is_person_noun(head: &str) -> bool {
     gender_of_noun(&h).is_some() || PERSON_NOUNS.contains(&h.as_str()) || ["er", "or", "ist", "ian", "ess"].iter().any(|s| h.len() > s.len() + 2 && h.ends_with(s))
 }
 const RECENCY_WEIGHT: f32 = 0.5;
+// "Smith's room": the possessor is said in passing
+const POSSESSOR_PENALTY: f32 = 0.5;
+// "Holmes answered": the speaker is who the next sentence is about
+const SPEAKER_BONUS: f32 = 0.5;
 
 pub fn resolve(all: &mut [Mention]) {
     let snapshot: Vec<Mention> = all.to_vec();
@@ -490,6 +533,12 @@ pub fn resolve(all: &mut [Mention]) {
             if c.subject {
                 score += 0.5;
             }
+            if c.possessor {
+                score -= POSSESSOR_PENALTY;
+            }
+            if c.speaker {
+                score += SPEAKER_BONUS;
+            }
             // a name mentioned several times is what the text is about
             if c.kind == Kind::Name && animate {
                 let times = snapshot[..i].iter().filter(|o| o.kind == Kind::Name && same_name(&o.text, &c.text)).count();
@@ -545,7 +594,7 @@ pub fn resolve(all: &mut [Mention]) {
 /// Words joined with spaces, hyphen runs closed up ("owner-run").
 pub fn join_words<S: AsRef<str>>(words: &[S]) -> String {
     let words: Vec<&str> = words.iter().map(|w| w.as_ref()).collect();
-    words.join(" ").replace(" - ", "-")
+    words.join(" ").replace(" - ", "-").replace(" 's", "'s").replace(" n't", "n't")
 }
 
 // Byte spans for every mention and candidate, from the word spans of each
@@ -892,6 +941,23 @@ mod tests {
         ]);
         let she = all.iter().find(|m| m.text == "She").unwrap();
         assert_eq!(she.candidates[0].text, "Miss Roylott");
+    }
+
+    #[test]
+    fn possessor_and_speaker_are_marked() {
+        let all = doc(&[
+            "(S (NP (NNP Holmes)) (VP (VBD answered)) (. .))",
+            "(S (NP (PRP We)) (VP (MD will) (VP (VB enter) (NP (NP (NNP Roylott) (POS 's)) (NN room)))) (. .))",
+            "(S (NP (PRP He)) (VP (VBD lit) (NP (DT the) (NN lamp))) (. .))",
+        ]);
+        let holmes = all.iter().find(|m| m.text == "Holmes").unwrap();
+        assert!(holmes.speaker && holmes.subject);
+        let roylott = all.iter().find(|m| m.text == "Roylott").unwrap();
+        assert!(roylott.possessor && !roylott.subject);
+        let room = all.iter().find(|m| m.text == "Roylott's room").unwrap();
+        assert_eq!(room.head, "room");
+        let he = all.iter().find(|m| m.text == "He").unwrap();
+        assert_eq!(he.candidates[0].text, "Holmes");
     }
 
     #[test]
