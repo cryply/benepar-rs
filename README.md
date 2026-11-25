@@ -66,13 +66,15 @@ He [Bob] read it [the report] and told her [Alice] that it [the report] was too 
 ```
 
 The rules: number agreement; names for he/she, descriptions for it;
-gender from a small list of common first names, plus whatever earlier
-pronouns in the same text already implied; a preference for subjects, for
+gender from a small list of common first names, from the noun of a
+description ("the widow", "my stepfather"), plus whatever earlier
+pronouns in the same text clearly implied; a preference for subjects, for
 names mentioned several times (what the text is about) and for mentions
 close to the pronoun; a name after a preposition of place ("in Evanston")
 is not a person unless its gender is known; forms of one name ("Smith",
-"Alice Smith") are one candidate and share a gender; reflexives bind in
-their own sentence. `--mentions`
+"Alice Smith") are one candidate and share a gender, but a different title
+("Miss Roylott" after "Dr. Roylott") or a known different gender makes
+two people; reflexives bind in their own sentence. `--mentions`
 also prints an entity index: each name or description with the sentences
 it occurs in, counting sentences that reach it through a pronoun. This is
 the hook for indexing notes by what they mention. It is a baseline, not a
@@ -270,8 +272,10 @@ Descriptors come from four places: titles before a name ("Governor"),
 modifiers and the head inside a description ("red-haired", "engineer"),
 appositions ("Smith, the manager,"), and complements of copulas and
 linking verbs ("became worried"). They are what a later implicit mention
-("the governor", "the red-haired one") can be matched against; that
-matching is not done here.
+("the governor", "the red-haired one") can be matched against. One such
+match is done: a definite description whose head is a title ("the
+Doctor", "the Governor") joins the one named entity that carries that
+title, when there is exactly one.
 
 ## Hyphenated compounds
 

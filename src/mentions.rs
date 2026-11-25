@@ -372,6 +372,42 @@ fn base_np(t: &Node, start: usize, sentence: usize, subject: bool) -> Option<Men
 // Fill in antecedent candidates for every pronoun, looking back over the
 // mentions of this and earlier sentences (in document order).
 const FREQUENCY_WEIGHT: f32 = 1.0;
+// a he/she resolution teaches a name its gender only when it is this
+// clear of the next candidate
+const LEARN_MARGIN: f32 = 0.5;
+
+const FEMALE_NOUNS: &[&str] = &[
+    "woman", "lady", "girl", "mother", "sister", "daughter", "wife", "widow", "aunt", "niece", "grandmother", "queen", "princess",
+    "actress", "waitress", "nun", "bride", "stepmother", "stepdaughter", "madam", "mrs", "miss", "mistress", "maid", "heroine",
+];
+const MALE_NOUNS: &[&str] = &[
+    "man", "gentleman", "boy", "father", "brother", "son", "husband", "widower", "uncle", "nephew", "grandfather", "king", "prince",
+    "actor", "waiter", "monk", "groom", "stepfather", "stepson", "sir", "mr", "lad", "fellow", "chap", "guy", "hero",
+];
+const PERSON_NOUNS: &[&str] = &[
+    "person", "child", "kid", "baby", "friend", "doctor", "visitor", "client", "stranger", "servant", "patient", "neighbour",
+    "neighbor", "companion", "colleague", "partner", "relative", "cousin", "parent", "spouse", "twin", "officer", "detective",
+    "inspector", "butler", "blacksmith", "coroner", "major", "general", "squire", "heir", "gambler", "pauper", "correspondent",
+    "master", "villager", "people", "folks", "student", "teacher", "nurse", "judge", "author", "agent", "assistant", "chief",
+    "boss", "chef", "pilot", "resident", "president",
+];
+
+/// Gender a common noun implies for a person ("widow", "stepfather").
+pub(crate) fn gender_of_noun(head: &str) -> Option<Gender> {
+    let h = head.to_lowercase();
+    if FEMALE_NOUNS.contains(&h.as_str()) {
+        Some(Gender::Female)
+    } else if MALE_NOUNS.contains(&h.as_str()) {
+        Some(Gender::Male)
+    } else {
+        None
+    }
+}
+
+pub(crate) fn is_person_noun(head: &str) -> bool {
+    let h = head.to_lowercase();
+    gender_of_noun(&h).is_some() || PERSON_NOUNS.contains(&h.as_str()) || ["er", "or", "ist", "ian", "ess"].iter().any(|s| h.len() > s.len() + 2 && h.ends_with(s))
+}
 const RECENCY_WEIGHT: f32 = 0.5;
 
 pub fn resolve(all: &mut [Mention]) {
@@ -434,7 +470,14 @@ pub fn resolve(all: &mut [Mention]) {
                         _ => {}
                     }
                 }
-                (true, Kind::Nominal) => score += 0.5,
+                // "the widow", "my stepfather": a person whose gender the
+                // noun gives away; "the doctor": a person; "the time": not
+                (true, Kind::Nominal) => match (want, gender_of_noun(&c.head)) {
+                    (Some(w), Some(h)) if w == h => score += 1.0,
+                    (Some(_), Some(_)) => continue,
+                    _ if is_person_noun(&c.head) => score += 0.5,
+                    _ => {}
+                },
                 // "it": a thing, not a person with a known gender
                 (false, Kind::Name) => {
                     if have.is_some() {
@@ -448,7 +491,7 @@ pub fn resolve(all: &mut [Mention]) {
                 score += 0.5;
             }
             // a name mentioned several times is what the text is about
-            if c.kind == Kind::Name {
+            if c.kind == Kind::Name && animate {
                 let times = snapshot[..i].iter().filter(|o| o.kind == Kind::Name && same_name(&o.text, &c.text)).count();
                 score += FREQUENCY_WEIGHT * (times.min(5) as f32 - 1.0);
             }
@@ -482,8 +525,9 @@ pub fn resolve(all: &mut [Mention]) {
             }
         });
         cands.truncate(5);
-        // remember the gender a he/she resolution implies for a name
-        if let (Some(w), Some(best)) = (want, cands.first()) {
+        // remember the gender a clear he/she resolution implies for a name
+        let clear = cands.len() == 1 || cands.len() >= 2 && cands[0].score - cands[1].score >= LEARN_MARGIN;
+        if let (Some(w), Some(best), true) = (want, cands.first(), clear) {
             let key = best.text.to_lowercase();
             if !known.iter().any(|(k, _, _)| *k == key) && snapshot.iter().any(|c| c.kind == Kind::Name && c.text.to_lowercase() == key) {
                 known.push((key, best.text.clone(), w));
@@ -519,7 +563,7 @@ pub fn attach_spans(all: &mut [Mention], offsets: &[Vec<(usize, usize)>]) {
     }
 }
 
-const NOT_NAME_WORDS: &[&str] = &["the", "a", "an", "this", "that", "these", "those", "mr", "mrs", "ms", "dr", "prof"];
+const NOT_NAME_WORDS: &[&str] = &["the", "a", "an", "this", "that", "these", "those", "mr", "mrs", "ms", "miss", "dr", "prof", "sir", "lady", "lord"];
 
 pub(crate) fn name_words(text: &str) -> Vec<String> {
     text.split(|c: char| c.is_whitespace() || c == '-')
@@ -529,12 +573,32 @@ pub(crate) fn name_words(text: &str) -> Vec<String> {
         .collect()
 }
 
+fn title_of(text: &str) -> Option<String> {
+    let first = text.split_whitespace().next()?.trim_matches('.').to_lowercase();
+    matches!(first.as_str(), "mr" | "mrs" | "ms" | "miss" | "dr" | "prof" | "sir" | "lady" | "lord").then_some(first)
+}
+
 /// Do two mention texts look like the same name: they share a capitalized
-/// word ("Alice Smith" and "Smith", "Mrs. Smith" and "Alice Smith").
+/// word ("Alice Smith" and "Smith", "Mrs. Smith" and "Alice Smith"), and
+/// nothing says they are two people: a gender known for both that
+/// differs, or "Mrs." against "Miss".
 pub fn same_name(a: &str, b: &str) -> bool {
     let wa = name_words(a);
     let wb = name_words(b);
-    wa.iter().any(|w| wb.contains(w))
+    if !wa.iter().any(|w| wb.contains(w)) {
+        return false;
+    }
+    if let (Some(x), Some(y)) = (gender_of_name(a), gender_of_name(b)) {
+        if x != y {
+            return false;
+        }
+    }
+    // "Miss Roylott" and "Dr. Roylott" are two people; "Mr." and "Dr."
+    // may be one
+    match (title_of(a), title_of(b)) {
+        (Some(x), Some(y)) if x != y => !(matches!(x.as_str(), "miss" | "mrs" | "ms") || matches!(y.as_str(), "miss" | "mrs" | "ms")),
+        _ => true,
+    }
 }
 
 /// How far the best candidate of a pronoun is ahead of the next one that
@@ -815,6 +879,19 @@ mod tests {
         assert!(same_name(&she.candidates[0].text, "Smith"));
         let him = all.iter().find(|m| m.text == "him").unwrap();
         assert_eq!(him.candidates[0].text, "Angeloz");
+    }
+
+    #[test]
+    fn another_title_is_another_person() {
+        assert!(same_name("Dr. Grimesby Roylott", "Dr. Roylott"));
+        assert!(!same_name("Miss Roylott", "Dr. Roylott"));
+        assert!(!same_name("Mrs. Stoner", "Miss Stoner"));
+        let all = doc(&[
+            "(S (NP (NNP Dr.) (NNP Roylott)) (VP (VBD met) (NP (NNP Miss) (NNP Roylott))) (. .))",
+            "(S (NP (PRP She)) (VP (VBD left)) (. .))",
+        ]);
+        let she = all.iter().find(|m| m.text == "She").unwrap();
+        assert_eq!(she.candidates[0].text, "Miss Roylott");
     }
 
     #[test]
