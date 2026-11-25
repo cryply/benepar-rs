@@ -303,15 +303,22 @@ pub fn pronominalize(trees: &[Node], min_margin: f32) -> Rewrite {
         // report and told") are fine
         let w = &words[m.sentence];
         let t = &tags[m.sentence];
+        let possessive = t.get(m.end).is_some_and(|t| t == "POS");
+        // a possessor ("Bob's boss") is inside the phrase it opens, and
+        // becomes "his" all the same
         let inside = orig.iter().any(|o| {
-            o.kind != Kind::Pronoun && o.sentence == m.sentence && o.start <= m.start && o.end >= m.end && (o.start, o.end) != (m.start, m.end)
+            o.kind != Kind::Pronoun
+                && o.sentence == m.sentence
+                && o.start <= m.start
+                && o.end >= m.end
+                && (o.start, o.end) != (m.start, m.end)
+                && !(possessive && o.start == m.start)
         });
         let is_cc = |j: usize| w.get(j).is_some_and(|x| matches!(x.to_lowercase().as_str(), "and" | "or" | "nor"));
         let clause_follows = t.get(m.end + 1).is_some_and(|x| x.starts_with("VB") || x == "MD" || x == "PRP" || x == "DT");
         if inside || (m.start > 0 && is_cc(m.start - 1) && !m.subject) || (is_cc(m.end) && !clause_follows) {
             continue;
         }
-        let possessive = tags[m.sentence].get(m.end).is_some_and(|t| t == "POS");
         let case = if possessive {
             Case::Possessive
         } else if m.subject {

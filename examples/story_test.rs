@@ -196,6 +196,12 @@ fn render(cond: &str, p: &Prepared, character: &str, min_margin: f32, alternativ
                         continue;
                     }
                     let ev = &p.events[r.sentence][r.event];
+                    // "I am Dr. Roylott", "we shall see him": who speaks is
+                    // not known, so the event says nothing usable
+                    let speech = |t: &str| matches!(t.to_lowercase().as_str(), "i" | "me" | "my" | "we" | "us" | "our" | "you" | "your");
+                    if ev.args.iter().any(|a| speech(&a.text)) {
+                        continue;
+                    }
                     let mut line = ev.word.clone();
                     if !ev.aux.is_empty() {
                         line.push_str(&format!(" [{}]", ev.aux.join(" ")));
