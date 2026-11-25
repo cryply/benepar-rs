@@ -68,8 +68,9 @@ pub struct Candidate {
     pub span: Option<(usize, usize)>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Gender {
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Gender {
     Male,
     Female,
 }
@@ -367,11 +368,11 @@ pub fn resolve(all: &mut [Mention]) {
     let snapshot: Vec<Mention> = all.to_vec();
     // genders learned from the name list and from earlier resolutions,
     // keyed by lowercased mention text
-    let mut known: Vec<(String, Gender)> = Vec::new();
+    let mut known: Vec<(String, String, Gender)> = Vec::new();
     for c in &snapshot {
         if c.kind == Kind::Name {
             if let Some(g) = gender_of_name(&c.text) {
-                known.push((c.text.to_lowercase(), g));
+                known.push((c.text.to_lowercase(), c.text.clone(), g));
             }
         }
     }
@@ -405,7 +406,12 @@ pub fn resolve(all: &mut [Mention]) {
                 continue;
             }
             let key = c.text.to_lowercase();
-            let have = known.iter().find(|(k, _)| *k == key).map(|(_, g)| *g);
+            // "Smith" takes the gender of "Alice Smith"
+            let have = known
+                .iter()
+                .find(|(k, _, _)| *k == key)
+                .or_else(|| known.iter().find(|(_, orig, _)| c.kind == Kind::Name && same_name(orig, &c.text)))
+                .map(|(_, _, g)| *g);
             let mut score = 0.0f32;
             match (animate, c.kind) {
                 (true, Kind::Name) => {
@@ -469,8 +475,8 @@ pub fn resolve(all: &mut [Mention]) {
         // remember the gender a he/she resolution implies for a name
         if let (Some(w), Some(best)) = (want, cands.first()) {
             let key = best.text.to_lowercase();
-            if !known.iter().any(|(k, _)| *k == key) && snapshot.iter().any(|c| c.kind == Kind::Name && c.text.to_lowercase() == key) {
-                known.push((key, w));
+            if !known.iter().any(|(k, _, _)| *k == key) && snapshot.iter().any(|c| c.kind == Kind::Name && c.text.to_lowercase() == key) {
+                known.push((key, best.text.clone(), w));
             }
         }
         if let Some(best) = cands.first() {
@@ -761,6 +767,19 @@ mod tests {
         ]);
         let she = all.iter().find(|m| m.text == "She").unwrap();
         assert_eq!(she.candidates[0].text, "Alice");
+    }
+
+    #[test]
+    fn short_name_forms_share_the_gender() {
+        let all = doc(&[
+            "(S (NP (NNP Alice) (NNP Smith)) (VP (VBD met) (NP (NNP Angeloz))) (. .))",
+            "(S (NP (NNP Smith)) (VP (VBD left)) (. .))",
+            "(S (NP (PRP She)) (VP (VBD thanked) (NP (PRP him))) (. .))",
+        ]);
+        let she = all.iter().find(|m| m.text == "She").unwrap();
+        assert!(same_name(&she.candidates[0].text, "Smith"));
+        let him = all.iter().find(|m| m.text == "him").unwrap();
+        assert_eq!(him.candidates[0].text, "Angeloz");
     }
 
     #[test]

@@ -78,19 +78,19 @@ fn subset(a: &[String], b: &[String]) -> bool {
     !a.is_empty() && a.iter().all(|w| b.contains(w))
 }
 
-struct Entity {
-    first: String,
-    names: Vec<Vec<String>>,
-    key: Option<String>,
-    number: Number,
-    gender: Option<Gender>,
+pub(crate) struct Entity {
+    pub(crate) first: String,
+    pub(crate) names: Vec<Vec<String>>,
+    pub(crate) key: Option<String>,
+    pub(crate) number: Number,
+    pub(crate) gender: Option<Gender>,
     // more than one gender was implied by the pronouns that refer to it
-    conflict: bool,
+    pub(crate) conflict: bool,
 }
 
 // Entity of every non-pronoun mention (None for pronouns and for mentions
 // that could belong to more than one earlier entity).
-fn group(all: &[Mention], entities: &mut Vec<Entity>) -> Vec<Option<usize>> {
+pub(crate) fn group(all: &[Mention], entities: &mut Vec<Entity>) -> Vec<Option<usize>> {
     let mut of = vec![None; all.len()];
     for (i, m) in all.iter().enumerate() {
         match m.kind {
@@ -157,7 +157,7 @@ fn group(all: &[Mention], entities: &mut Vec<Entity>) -> Vec<Option<usize>> {
 }
 
 // Index of the mention that a candidate stands for.
-fn mention_at(all: &[Mention], sentence: usize, start: usize, end: usize) -> Option<usize> {
+pub(crate) fn mention_at(all: &[Mention], sentence: usize, start: usize, end: usize) -> Option<usize> {
     all.iter().position(|m| m.sentence == sentence && m.start == start && m.end == end && m.kind != Kind::Pronoun)
 }
 
@@ -250,16 +250,11 @@ impl State {
     }
 }
 
-/// Rewrite the parsed sentences of one text with repeated mentions turned
-/// into pronouns where that keeps the reference clear.
-pub fn pronominalize(trees: &[Node], min_margin: f32) -> Rewrite {
-    let orig = resolve_all(trees);
-    let mut entities = Vec::new();
-    let of = group(&orig, &mut entities);
-    // genders implied by the pronouns of the original text
-    for m in orig.iter().filter(|m| m.kind == Kind::Pronoun) {
+// Genders implied by the pronouns that refer to each entity.
+pub(crate) fn learn_genders(all: &[Mention], of: &[Option<usize>], entities: &mut [Entity]) {
+    for m in all.iter().filter(|m| m.kind == Kind::Pronoun) {
         let (Some(g), Some(c)) = (mentions::pronoun_gender(&m.head), m.candidates.first()) else { continue };
-        let Some(e) = mention_at(&orig, c.sentence, c.start, c.end).and_then(|i| of[i]) else { continue };
+        let Some(e) = mention_at(all, c.sentence, c.start, c.end).and_then(|i| of[i]) else { continue };
         let ent = &mut entities[e];
         match ent.gender {
             None if !ent.conflict && ent.key.is_none() => ent.gender = Some(g),
@@ -270,6 +265,15 @@ pub fn pronominalize(trees: &[Node], min_margin: f32) -> Rewrite {
             _ => {}
         }
     }
+}
+
+/// Rewrite the parsed sentences of one text with repeated mentions turned
+/// into pronouns where that keeps the reference clear.
+pub fn pronominalize(trees: &[Node], min_margin: f32) -> Rewrite {
+    let orig = resolve_all(trees);
+    let mut entities = Vec::new();
+    let of = group(&orig, &mut entities);
+    learn_genders(&orig, &of, &mut entities);
     let tags: Vec<Vec<String>> = trees.iter().map(|t| crate::treebank::leaves(t).into_iter().map(|(t, _)| t).collect()).collect();
     let words: Vec<Vec<String>> = trees.iter().map(|t| crate::treebank::leaves(t).into_iter().map(|(_, w)| w).collect()).collect();
     let mut state = State { trees: trees.to_vec(), origin: tags.iter().map(|t| (0..t.len()).collect()).collect() };

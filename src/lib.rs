@@ -10,6 +10,7 @@
 
 pub mod chart;
 pub mod compounds;
+pub mod entities;
 pub mod gap;
 pub mod mentions;
 pub mod model;

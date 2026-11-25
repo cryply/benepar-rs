@@ -52,7 +52,7 @@ pub struct Event {
 }
 
 // Collapsed unary chains ("S::VP") expanded into nested nodes.
-fn expand(t: &Node) -> Node {
+pub(crate) fn expand(t: &Node) -> Node {
     match t {
         Node::Leaf(..) => t.clone(),
         Node::Phrase(_, kids) => {
