@@ -115,6 +115,10 @@ pub struct Prediction {
     pub free: Option<Slot>,
     pub restricted: Option<Slot>,
     pub margin: Option<f32>,
+    // sentences between the pronoun and its best candidate
+    pub distance: Option<usize>,
+    // how many candidates passed the hard filters
+    pub candidates: usize,
 }
 
 /// Prediction for one example from its resolved mentions (with spans).
@@ -127,7 +131,8 @@ pub fn predict(ex: &Example, all: &[Mention]) -> Prediction {
     };
     let free = p.candidates.first().and_then(|c| slot_of(ex, &c.text, c.span));
     let restricted = p.candidates.iter().find_map(|c| slot_of(ex, &c.text, c.span));
-    Prediction { found: true, free, restricted, margin: mentions::margin(p) }
+    let distance = p.candidates.first().map(|c| p.sentence - c.sentence);
+    Prediction { found: true, free, restricted, margin: mentions::margin(p), distance, candidates: p.candidates.len() }
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -190,6 +195,13 @@ pub struct Report {
     // many of them are right
     pub kept: [usize; THRESHOLDS.len()],
     pub kept_right: [usize; THRESHOLDS.len()],
+    // free predictions of A or B by distance: same sentence, previous,
+    // two or more back; and how many are right
+    pub by_distance: [usize; 3],
+    pub by_distance_right: [usize; 3],
+    // free predictions with exactly one candidate, and how many are right
+    pub lone: usize,
+    pub lone_right: usize,
 }
 
 impl Report {
@@ -224,6 +236,15 @@ impl Report {
                         self.kept_right[i] += 1;
                     }
                 }
+            }
+            let d = pred.distance.unwrap_or(0).min(2);
+            self.by_distance[d] += 1;
+            if right {
+                self.by_distance_right[d] += 1;
+            }
+            if pred.candidates == 1 {
+                self.lone += 1;
+                self.lone_right += right as usize;
             }
         }
     }
@@ -261,6 +282,19 @@ impl Report {
                 100.0 * self.kept_right[i] as f64 / self.kept[i].max(1) as f64
             );
         }
+        println!("free predictions of A or B by distance to the antecedent:");
+        for (i, name) in ["same sentence", "previous sentence", "further back"].iter().enumerate() {
+            println!(
+                "  {name:18} {:5}  precision {:5.1}",
+                self.by_distance[i],
+                100.0 * self.by_distance_right[i] as f64 / self.by_distance[i].max(1) as f64
+            );
+        }
+        println!(
+            "free predictions with a single candidate: {}  precision {:5.1}",
+            self.lone,
+            100.0 * self.lone_right as f64 / self.lone.max(1) as f64
+        );
         // The rules only look back, so these occurrences cannot be chosen;
         // the same name may still occur before the pronoun too.
         println!(

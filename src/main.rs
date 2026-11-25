@@ -70,6 +70,10 @@ struct Args {
     /// with --pronominalize: insert a pronoun only with this margin
     #[arg(long, default_value_t = 0.0)]
     min_margin: f32,
+    /// With --canonical: when the margin is below --min-margin, list up to
+    /// this many candidates instead of nothing ("he [Smith or Jones]")
+    #[arg(long, default_value_t = 1)]
+    alternatives: usize,
     /// Print the hyphenated compounds of every sentence as JSON: parts,
     /// tags, pattern and the role of the left part
     #[arg(long)]
@@ -350,7 +354,7 @@ fn main() -> Result<()> {
         mentions::attach_spans(&mut all, &text::offsets(&text, &sents));
         if args.canonical {
             let words: Vec<Vec<String>> = parses.iter().map(|p| p.words.clone()).collect();
-            for line in mentions::annotate(&words, &all, args.min_margin) {
+            for line in mentions::annotate(&words, &all, args.min_margin, args.alternatives) {
                 println!("{line}");
             }
         }

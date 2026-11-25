@@ -90,7 +90,8 @@ conjunct is meant (offering them cost 0.9 F1 on GAP).
 A pronoun's margin is how far its best antecedent scores ahead of the next
 candidate that is not the same name ("Smith" and "Alice Smith" count as
 one). `--canonical --min-margin X` leaves pronouns with a margin below X
-without a bracket.
+without a bracket, or, with `--alternatives N`, gives them the candidates
+within that margin instead of an answer: "he [Smith or Jones]".
 
 ### More pronouns
 
@@ -139,8 +140,9 @@ It prints F1 for masculine and feminine pronouns, their ratio and the
 overall F1, in two readings of the candidate list: `free` takes only the
 best candidate, `restricted` the best candidate that is one of the two
 names. It also prints how many free predictions are kept, and how many of
-them are right, at several margins, and how many gold names occur only
-after the pronoun (the rules look back only).
+them are right, at several margins, by distance to the chosen antecedent
+and when only one candidate survived the hard filters, and how many gold
+names occur only after the pronoun (the rules look back only).
 
 On gap-development (2000 examples) with benepar_en3: restricted F1 63.3
 overall (M 64.2, F 62.3), free F1 57.7 (precision 65.3, recall 51.6). The

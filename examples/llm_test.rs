@@ -48,6 +48,9 @@ struct Args {
     /// Margin for --canonical brackets and --pronominalize replacements
     #[arg(long, default_value_t = 0.0)]
     min_margin: f32,
+    /// For canonical: below the margin, list up to this many candidates
+    #[arg(long, default_value_t = 1)]
+    alternatives: usize,
     /// Parser threads
     #[arg(long, default_value_t = 4)]
     threads: usize,
@@ -180,7 +183,7 @@ fn mark(w: &str) -> String {
 // condition cannot be built for this example. For canonical, also which
 // option our own bracket on the marked pronoun points to (2 = neither),
 // or None without a bracket.
-fn render(cond: &str, ex: &Example, p: &Parsed, min_margin: f32) -> Option<(String, Option<usize>)> {
+fn render(cond: &str, ex: &Example, p: &Parsed, min_margin: f32, alternatives: usize) -> Option<(String, Option<usize>)> {
     let mut hint = None;
     if cond == "raw" {
         let end = ex.pronoun + ex.text[ex.pronoun..].find(|c: char| !c.is_alphanumeric()).unwrap_or(ex.text.len() - ex.pronoun);
@@ -201,13 +204,11 @@ fn render(cond: &str, ex: &Example, p: &Parsed, min_margin: f32) -> Option<(Stri
             mentions::attach_spans(&mut all, &text::offsets(&ex.text, &p.sents));
             lines[ps][pw] = mark(&lines[ps][pw]);
             for m in all.iter().filter(|m| m.kind == Kind::Pronoun) {
-                if mentions::margin(m).is_none_or(|g| g < min_margin) {
-                    continue;
-                }
+                let Some(b) = mentions::bracket(m, min_margin, alternatives) else { continue };
                 let Some(c) = m.candidates.first() else { continue };
-                if c.text.to_lowercase() != m.text.to_lowercase() {
-                    lines[m.sentence][m.start] = format!("{} [{}]", lines[m.sentence][m.start], c.text);
-                    if (m.sentence, m.start) == (ps, pw) {
+                {
+                    lines[m.sentence][m.start] = format!("{} [{}]", lines[m.sentence][m.start], b);
+                    if (m.sentence, m.start) == (ps, pw) && !b.contains(" or ") {
                         hint = Some(match ex.gap.as_ref().and_then(|g| gap::slot_of(g, &c.text, c.span)) {
                             Some(gap::Slot::A) => 0,
                             Some(gap::Slot::B) => 1,
@@ -483,7 +484,7 @@ fn main() -> Result<()> {
     for (i, (ex, p)) in examples.iter().zip(&parsed).enumerate() {
         let mut texts = Vec::new();
         for c in &conditions {
-            match render(c, ex, p, args.min_margin) {
+            match render(c, ex, p, args.min_margin, args.alternatives) {
                 Some((t, h)) => texts.push((*c, t, h)),
                 None => {
                     texts.clear();

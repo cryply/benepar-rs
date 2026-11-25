@@ -536,21 +536,44 @@ pub fn margin(m: &Mention) -> Option<f32> {
     Some(next.map_or(f32::INFINITY, |c| best.score - c.score))
 }
 
+/// The bracket to put after a pronoun: its best antecedent, or, when the
+/// margin is below `min_margin`, up to `alternatives` candidates joined
+/// with "or" ("Smith or Jones"); None when nothing should be shown.
+pub fn bracket(m: &Mention, min_margin: f32, alternatives: usize) -> Option<String> {
+    let best = m.candidates.first()?;
+    if best.text.to_lowercase() == m.text.to_lowercase() {
+        return None;
+    }
+    if margin(m).is_some_and(|g| g >= min_margin) {
+        return Some(best.text.clone());
+    }
+    if alternatives < 2 {
+        return None;
+    }
+    // candidates close enough to the best one to be worth listing
+    let mut names: Vec<&str> = Vec::new();
+    for c in &m.candidates {
+        if best.score - c.score > min_margin || names.len() == alternatives {
+            break;
+        }
+        if !names.iter().any(|n| same_name(n, &c.text) || n.to_lowercase() == c.text.to_lowercase()) {
+            names.push(&c.text);
+        }
+    }
+    (names.len() >= 2).then(|| names.join(" or "))
+}
+
 // Words of every sentence with each resolved pronoun followed by its best
 // antecedent in brackets: "she [Alice] would call him [Bob]". Pronouns whose
-// margin is below `min_margin` are left as they are.
-pub fn annotate(sentences: &[Vec<String>], all: &[Mention], min_margin: f32) -> Vec<String> {
+// margin is below `min_margin` are left as they are, or get a list of up
+// to `alternatives` candidates: "he [Smith or Jones]".
+pub fn annotate(sentences: &[Vec<String>], all: &[Mention], min_margin: f32, alternatives: usize) -> Vec<String> {
     let mut out = Vec::new();
     for (si, words) in sentences.iter().enumerate() {
         let mut pieces: Vec<String> = words.clone();
         for m in all.iter().filter(|m| m.sentence == si && m.kind == Kind::Pronoun) {
-            if margin(m).is_none_or(|g| g < min_margin) {
-                continue;
-            }
-            if let Some(c) = m.candidates.first() {
-                if c.text.to_lowercase() != m.text.to_lowercase() {
-                    pieces[m.start] = format!("{} [{}]", words[m.start], c.text);
-                }
+            if let Some(b) = bracket(m, min_margin, alternatives) {
+                pieces[m.start] = format!("{} [{}]", words[m.start], b);
             }
         }
         out.push(join_words(&pieces));
@@ -645,10 +668,10 @@ mod tests {
             .iter()
             .map(|t| crate::treebank::leaves(&parse(t).unwrap()).into_iter().map(|(_, w)| w).collect())
             .collect();
-        let ann = annotate(&words, &all, 0.0);
+        let ann = annotate(&words, &all, 0.0, 1);
         assert_eq!(ann[1], "They [The engineers] liked it [the report] .");
         // each pronoun has one candidate, so any threshold keeps them
-        let strict = annotate(&words, &all, 100.0);
+        let strict = annotate(&words, &all, 100.0, 1);
         assert_eq!(strict, ann);
         let ents = entities(&all);
         let report = ents.iter().find(|(k, _)| k == "the report").unwrap();
@@ -666,7 +689,8 @@ mod tests {
             .iter()
             .map(|t| crate::treebank::leaves(&parse(t).unwrap()).into_iter().map(|(_, w)| w).collect())
             .collect();
-        assert_eq!(annotate(&words2, &all2, 1.0)[1], "It was long .");
+        assert_eq!(annotate(&words2, &all2, 1.0, 1)[1], "It was long .");
+        assert_eq!(annotate(&words2, &all2, 1.0, 2)[1], "It [The engineer or the report] was long .");
     }
 
     #[test]
