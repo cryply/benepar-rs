@@ -1,4 +1,4 @@
-use benepar_rs::{gap, mentions, model, pronominalize, skeleton, text, treebank};
+use benepar_rs::{entities, gap, mentions, model, pronominalize, skeleton, text, treebank};
 use anyhow::{Context, Result};
 use clap::Parser as _;
 use std::io::Read;
@@ -60,6 +60,11 @@ struct Args {
     /// events with word positions and mention indices
     #[arg(long)]
     skeleton: bool,
+    /// Print the entities of the text: each with its mentions, what the
+    /// text says about it (titles, modifiers, appositions, complements)
+    /// and its roles in the skeleton's events; --json for the full index
+    #[arg(long)]
+    entities: bool,
     /// With --canonical: annotate a pronoun only if its best antecedent is
     /// at least this far ahead of the next one that is not the same name;
     /// with --pronominalize: insert a pronoun only with this margin
@@ -312,6 +317,27 @@ fn main() -> Result<()> {
         }
         if args.json {
             println!("{}", serde_json::Value::Array(out));
+        }
+        return Ok(());
+    }
+    if args.entities {
+        let trees: Vec<_> = parses.iter().map(|p| p.trees[0].1.clone()).collect();
+        let mut all = Vec::new();
+        let mut events = Vec::new();
+        for (i, t) in trees.iter().enumerate() {
+            let m = mentions::mentions(t, i);
+            events.push(skeleton::events(t, i, &m));
+            all.extend(m);
+        }
+        mentions::resolve(&mut all);
+        mentions::attach_spans(&mut all, &text::offsets(&text, &sents));
+        let ents = entities::entities(&trees, &all, &events);
+        if args.json {
+            println!("{}", serde_json::json!({"entities": ents, "events": events}));
+        } else {
+            for line in entities::lines(&ents) {
+                println!("{line}");
+            }
         }
         return Ok(());
     }

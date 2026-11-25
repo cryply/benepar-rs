@@ -71,7 +71,8 @@ pronouns in the same text already implied; a preference for subjects, for
 names mentioned several times (what the text is about) and for mentions
 close to the pronoun; a name after a preposition of place ("in Evanston")
 is not a person unless its gender is known; forms of one name ("Smith",
-"Alice Smith") are one candidate; reflexives bind in their own sentence. `--mentions`
+"Alice Smith") are one candidate and share a gender; reflexives bind in
+their own sentence. `--mentions`
 also prints an entity index: each name or description with the sentences
 it occurs in, counting sentences that reach it through a pronoun. This is
 the hook for indexing notes by what they mention. It is a baseline, not a
@@ -141,8 +142,8 @@ names. It also prints how many free predictions are kept, and how many of
 them are right, at several margins, and how many gold names occur only
 after the pronoun (the rules look back only).
 
-On gap-development (2000 examples) with benepar_en3: restricted F1 63.2
-overall (M 64.1, F 62.2), free F1 57.3 (precision 65.0, recall 51.3). The
+On gap-development (2000 examples) with benepar_en3: restricted F1 63.3
+overall (M 64.2, F 62.3), free F1 57.7 (precision 65.3, recall 51.6). The
 margin separates right from wrong answers only weakly: precision goes from
 65.0 with every prediction kept to 72.2 at margin 2.0, where 31% of the
 examples keep a prediction. 353 of the 1799 gold names occur after the
@@ -222,6 +223,33 @@ from the gold trees; (verb, object) pairs 82.6 / 92.0 / 87.1 and 84.9 /
 93.6 / 89.0. Parsing costs about two points; the rest is the rules. The
 subject precision gap is mostly by design: the rules fill in controlled
 subjects that the treebank leaves empty.
+
+## Entities
+
+`--entities` lists who and what the text mentions: each entity with its
+mentions (a name and its other forms, a description and its repeats, the
+pronouns resolved to it), what the text says about it, and its roles in
+the skeleton's events. With `--json` every mention carries its position
+and byte span and every role its event, so the output can serve as an
+index of the text for whoever keeps one; nothing here depends on any
+store.
+
+```
+$ benepar-rs --model ./benepar_en3 --entities "Governor Angeloz met Alice Smith, the red-haired engineer from Munich, at the station. Smith had designed the new engine. She told him that the engine overheated, and he became worried."
+#0 Governor Angeloz (him, he)  [title:Governor; complement:worried]  {subject of met, object of told, subject of became}
+#1 Alice Smith (Smith, She)  [apposition:the red-haired engineer]  {object of met, subject of designed, subject of told}
+#2 the red-haired engineer  [modifier:red-haired; head:engineer]
+#3 Munich
+#4 the station  [head:station]  {prep:at of met}
+#5 the new engine (the engine)  [modifier:new; head:engine]  {object of designed, subject of overheated}
+```
+
+Descriptors come from four places: titles before a name ("Governor"),
+modifiers and the head inside a description ("red-haired", "engineer"),
+appositions ("Smith, the manager,"), and complements of copulas and
+linking verbs ("became worried"). They are what a later implicit mention
+("the governor", "the red-haired one") can be matched against; that
+matching is not done here.
 
 ## Hyphenated compounds
 
