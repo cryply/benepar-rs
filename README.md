@@ -183,6 +183,26 @@ every condition against the first one. The Winograd Schema Collection
 (https://cs.nyu.edu/faculty/davise/papers/WinogradSchemas/WSCollection.xml)
 holds 285 schemas; the first 273 are WSC273.
 
+### A character's biography
+
+`examples/story_test.rs` asks the model for every fact a story gives
+about one character, then has the same model judge the list: which gold
+facts it contains (recall) and which of its statements the original text
+supports (precision), with the token cost of each form of the text. The
+forms are `raw`, `plain`, `canonical`, `pronominalize`, `mentions` (only
+the sentences that mention the character according to the entity index,
+pronouns included) and `index` (no text: the character's descriptors and
+the skeleton events it takes part in).
+
+```
+$ cargo run --release --example story_test -- --model MODEL --text speckled_band.txt \
+      --character "Dr. Grimesby Roylott" --gold roylott.facts --out-dir story-out
+```
+
+The text is one paragraph per line; the gold file one fact per line.
+`--out-dir` keeps every form of the text, the model's lists and the
+judge's verdicts (missing facts, unsupported statements).
+
 ## Sentence skeleton
 
 `--skeleton` reads the events of every sentence off the tree with head

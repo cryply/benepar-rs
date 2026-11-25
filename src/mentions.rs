@@ -140,6 +140,16 @@ fn is_noun_tag(t: &str) -> bool {
     matches!(t, "NN" | "NNS" | "NNP" | "NNPS")
 }
 
+/// Is this word a personal, possessive or reflexive pronoun.
+pub fn is_pronoun_word(w: &str) -> bool {
+    matches!(
+        w.to_lowercase().as_str(),
+        "i" | "me" | "my" | "mine" | "myself" | "you" | "your" | "yours" | "yourself" | "yourselves" | "he" | "him" | "his" | "himself"
+            | "she" | "her" | "hers" | "herself" | "it" | "its" | "itself" | "we" | "us" | "our" | "ours" | "ourselves" | "they" | "them"
+            | "their" | "theirs" | "themselves"
+    )
+}
+
 fn is_pronoun_tag(t: &str) -> bool {
     matches!(t, "PRP" | "PRP$")
 }
@@ -488,7 +498,8 @@ pub fn resolve(all: &mut [Mention]) {
 
 // Words joined by spaces, except around a hyphen that was split out of a
 // word ("owner - controlled" is printed as "owner-controlled").
-pub(crate) fn join_words<S: AsRef<str>>(words: &[S]) -> String {
+/// Words joined with spaces, hyphen runs closed up ("owner-run").
+pub fn join_words<S: AsRef<str>>(words: &[S]) -> String {
     let words: Vec<&str> = words.iter().map(|w| w.as_ref()).collect();
     words.join(" ").replace(" - ", "-")
 }

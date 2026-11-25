@@ -25,6 +25,9 @@ use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::PathBuf;
 
+mod common;
+use common::Client;
+
 #[derive(clap::Parser)]
 struct Args {
     /// Directory with the benepar model files
@@ -254,96 +257,6 @@ fn parse_answer(reply: &str, n: usize) -> Option<usize> {
     if i < n && !next.is_some_and(|c| c.is_ascii_alphabetic()) { Some(i) } else { None }
 }
 
-fn fnv64(s: &str) -> String {
-    let mut h: u64 = 0xcbf29ce484222325;
-    for b in s.bytes() {
-        h ^= b as u64;
-        h = h.wrapping_mul(0x100000001b3);
-    }
-    format!("{h:016x}")
-}
-
-struct Reply {
-    content: String,
-    prompt_tokens: Option<u64>,
-}
-
-struct Client {
-    agent: ureq::Agent,
-    base: String,
-    key: String,
-    model: String,
-    reasoning_effort: Option<String>,
-    cache: PathBuf,
-    min_gap: std::time::Duration,
-    last: Option<std::time::Instant>,
-}
-
-impl Client {
-    fn ask(&mut self, prompt: &str) -> Result<Reply> {
-        let key = fnv64(&format!("{}\0{}\0{prompt}", self.model, self.reasoning_effort.as_deref().unwrap_or("")));
-        let path = self.cache.join(format!("{key}.json"));
-        if let Ok(s) = std::fs::read_to_string(&path) {
-            let v: serde_json::Value = serde_json::from_str(&s)?;
-            return Ok(Reply {
-                content: v["content"].as_str().unwrap_or("").to_string(),
-                prompt_tokens: v["prompt_tokens"].as_u64(),
-            });
-        }
-        let mut body = serde_json::json!({
-            "model": self.model,
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0,
-            "max_tokens": 256,
-        });
-        if let Some(e) = &self.reasoning_effort {
-            body["reasoning_effort"] = serde_json::Value::String(e.clone());
-        }
-        let mut wait = std::time::Duration::from_secs(5);
-        for attempt in 0..10 {
-            if let Some(t) = self.last {
-                let since = t.elapsed();
-                if since < self.min_gap {
-                    std::thread::sleep(self.min_gap - since);
-                }
-            }
-            self.last = Some(std::time::Instant::now());
-            let mut req = self.agent.post(&format!("{}/chat/completions", self.base));
-            if !self.key.is_empty() {
-                req = req.header("Authorization", &format!("Bearer {}", self.key));
-            }
-            let resp = req.send_json(&body);
-            let mut resp = match resp {
-                Ok(r) => r,
-                Err(e) => {
-                    eprintln!("request failed ({e}), retry in {}s", wait.as_secs());
-                    std::thread::sleep(wait);
-                    wait = (wait * 2).min(std::time::Duration::from_secs(120));
-                    continue;
-                }
-            };
-            let status = resp.status().as_u16();
-            let text = resp.body_mut().read_to_string().unwrap_or_default();
-            if status == 429 || status >= 500 {
-                let short: String = text.chars().take(300).collect();
-                eprintln!("http {status} (attempt {}), retry in {}s: {}", attempt + 1, wait.as_secs(), short.trim());
-                std::thread::sleep(wait);
-                wait = (wait * 2).min(std::time::Duration::from_secs(120));
-                continue;
-            }
-            if status != 200 {
-                bail!("http {status}: {text}");
-            }
-            let v: serde_json::Value = serde_json::from_str(&text).context("response is not JSON")?;
-            let content = v["choices"][0]["message"]["content"].as_str().unwrap_or("").to_string();
-            let prompt_tokens = v["usage"]["prompt_tokens"].as_u64();
-            std::fs::write(&path, serde_json::json!({"content": content, "prompt_tokens": prompt_tokens}).to_string())?;
-            return Ok(Reply { content, prompt_tokens });
-        }
-        bail!("gave up after 10 attempts")
-    }
-}
-
 #[derive(Default)]
 struct Tally {
     n: usize,
@@ -392,6 +305,7 @@ struct Record<'a> {
     // canonical only: the option our bracket on the pronoun points to
     hint: Option<usize>,
     prompt_tokens: Option<u64>,
+    completion_tokens: Option<u64>,
     reply: &'a str,
 }
 
@@ -453,26 +367,10 @@ fn main() -> Result<()> {
         parsed.push(Parsed { sents, trees, at });
     }
 
-    let base = std::env::var("LLM_BASE_URL").unwrap_or_else(|_| "https://openrouter.ai/api/v1".to_string());
-    let key = std::env::var("LLM_API_KEY").unwrap_or_default();
-    if key.is_empty() && !args.dry_run {
-        eprintln!("LLM_API_KEY is not set, sending requests without one");
-    }
-    std::fs::create_dir_all(&args.cache)?;
-    let agent = ureq::Agent::config_builder()
-        .http_status_as_error(false)
-        .timeout_global(Some(std::time::Duration::from_secs(120)))
-        .build()
-        .new_agent();
-    let mut client = Client {
-        agent,
-        base: base.trim_end_matches('/').to_string(),
-        key,
-        model: args.model.clone(),
-        reasoning_effort: args.reasoning_effort.clone(),
-        cache: args.cache.clone(),
-        min_gap: std::time::Duration::from_millis(60_000 / args.rpm.max(1)),
-        last: None,
+    let mut client = if args.dry_run {
+        None
+    } else {
+        Some(Client::from_env(&args.model, args.reasoning_effort.clone(), &args.cache, args.rpm, 256)?)
     };
     let mut out = match &args.out {
         Some(p) => Some(std::fs::File::create(p)?),
@@ -507,7 +405,7 @@ fn main() -> Result<()> {
         }
         for (c, t, hint) in &texts {
             let pr = prompt(t, &ex.options);
-            let reply = client.ask(&pr)?;
+            let reply = client.as_mut().expect("client").ask(&pr)?;
             let answer = parse_answer(&reply.content, ex.options.len());
             let correct = answer == Some(ex.gold);
             let tally = tallies.entry(c).or_default();
@@ -520,7 +418,7 @@ fn main() -> Result<()> {
             }
             tally.results.insert(ex.id.clone(), correct);
             if let Some(f) = out.as_mut() {
-                let rec = Record { id: &ex.id, condition: c, gold: ex.gold, answer, correct, hint: *hint, prompt_tokens: reply.prompt_tokens, reply: reply.content.trim() };
+                let rec = Record { id: &ex.id, condition: c, gold: ex.gold, answer, correct, hint: *hint, prompt_tokens: reply.prompt_tokens, completion_tokens: reply.completion_tokens, reply: reply.content.trim() };
                 writeln!(f, "{}", serde_json::to_string(&rec)?)?;
             }
         }
