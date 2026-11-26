@@ -682,7 +682,7 @@ pub fn attach_spans(all: &mut [Mention], offsets: &[Vec<(usize, usize)>]) {
 
 const NOT_NAME_WORDS: &[&str] = &["the", "a", "an", "this", "that", "these", "those", "mr", "mrs", "ms", "miss", "dr", "prof", "sir", "lady", "lord"];
 
-pub(crate) fn name_words(text: &str) -> Vec<String> {
+pub fn name_words(text: &str) -> Vec<String> {
     text.split(|c: char| c.is_whitespace() || c == '-')
         .filter(|w| w.chars().next().is_some_and(|c| c.is_uppercase()))
         .map(|w| w.trim_matches('.').to_lowercase())

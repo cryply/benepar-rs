@@ -13,6 +13,8 @@ pub fn fnv64(s: &str) -> String {
     format!("{h:016x}")
 }
 
+// not every example reads the token counts
+#[allow(dead_code)]
 pub struct Reply {
     pub content: String,
     pub prompt_tokens: Option<u64>,
