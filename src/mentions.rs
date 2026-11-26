@@ -652,7 +652,14 @@ impl Speech {
                 2 => false,
                 _ => open_before[m.sentence] == 1,
             };
-            let named = all.iter().find(|m| m.speaker && m.sentence >= a && m.sentence <= b && !inside(m) && m.kind != Kind::Pronoun);
+            // "said Holmes", or "said he" once the pronoun has been resolved
+            let named = all
+                .iter()
+                .filter(|m| m.speaker && m.sentence >= a && m.sentence <= b && !inside(m))
+                .find_map(|m| match m.kind {
+                    Kind::Pronoun => m.candidates.first().and_then(|c| all.iter().find(|o| o.kind != Kind::Pronoun && o.sentence == c.sentence && o.start == c.start && o.end == c.end)),
+                    _ => Some(m),
+                });
             let who = match named {
                 Some(m) => Some(m.clone()),
                 None => {
@@ -703,6 +710,13 @@ fn indefinite(text: &str) -> bool {
 }
 
 pub fn resolve(all: &mut [Mention]) {
+    // twice: the second pass knows who "he" of "said he" is, and so who
+    // speaks the quotes attributed that way
+    resolve_pass(all);
+    resolve_pass(all);
+}
+
+fn resolve_pass(all: &mut [Mention]) {
     let snapshot: Vec<Mention> = all.to_vec();
     // genders learned from the name list and from earlier resolutions,
     // keyed by lowercased mention text
@@ -1252,6 +1266,18 @@ mod tests {
         for m in all.iter().filter(|m| m.text == "He") {
             assert_eq!(m.candidates[0].text, "My stepfather", "{:?}", m.candidates);
         }
+    }
+
+    #[test]
+    fn said_he_names_the_speaker() {
+        let all = doc(&[
+            "(S (NP (NNP Holmes)) (VP (VBD nodded)) (. .))",
+            "(SINV (`` \") (S (VP (VB Pray) (VP (VB go) (PRT (RP on))))) (, ,) ('' \") (VP (VBD said)) (NP (PRP he)) (. .))",
+            "(SINV (`` \") (S (NP (PRP$ My) (NN stepfather)) (VP (VBD returned))) (, ,) ('' \") (VP (VBD said)) (NP (DT the) (NN woman)) (. .))",
+            "(SINV (`` \") (S (NP (PRP He)) (VP (VBD shut) (NP (PRP himself)) (ADVP (RB up)))) (, ,) ('' \") (VP (VBD said)) (NP (PRP she)) (. .))",
+        ]);
+        let he = all.iter().find(|m| m.text == "He").unwrap();
+        assert_eq!(he.candidates[0].text, "My stepfather", "{:?}", he.candidates);
     }
 
     #[test]
