@@ -486,6 +486,13 @@ const RECENCY_WEIGHT: f32 = 0.5;
 const POSSESSOR_PENALTY: f32 = 0.5;
 // "Holmes answered": the speaker is who the next sentence is about
 const SPEAKER_BONUS: f32 = 0.5;
+// "A young lady has arrived. She...": a person just introduced by an
+// indefinite subject is who the next sentence is about
+const NEW_ENTITY_BONUS: f32 = 3.0;
+
+fn indefinite(text: &str) -> bool {
+    matches!(text.split_whitespace().next().map(|w| w.to_lowercase()).as_deref(), Some("a" | "an" | "some" | "another"))
+}
 
 pub fn resolve(all: &mut [Mention]) {
     let snapshot: Vec<Mention> = all.to_vec();
@@ -593,6 +600,9 @@ pub fn resolve(all: &mut [Mention]) {
             }
             if c.speaker {
                 score += SPEAKER_BONUS;
+            }
+            if animate && c.kind == Kind::Nominal && c.subject && c.sentence + 1 == m.sentence && indefinite(&c.text) && is_person_noun(&c.head) {
+                score += NEW_ENTITY_BONUS;
             }
             // a name mentioned several times is what the text is about
             if c.kind == Kind::Name && animate {
@@ -999,6 +1009,17 @@ mod tests {
         ]);
         let she = all.iter().find(|m| m.text == "She").unwrap();
         assert_eq!(she.candidates[0].text, "Miss Roylott");
+    }
+
+    #[test]
+    fn a_new_person_beats_an_old_name() {
+        let all = doc(&[
+            "(S (NP (NNP Mrs.) (NNP Hudson)) (VP (VBD knocked)) (. .))",
+            "(S (NP (DT A) (JJ young) (NN lady)) (VP (VBZ has) (VP (VBN arrived))) (. .))",
+            "(S (NP (PRP She)) (VP (VBZ is) (VP (VBG waiting))) (. .))",
+        ]);
+        let she = all.iter().find(|m| m.text == "She").unwrap();
+        assert_eq!(she.candidates[0].text, "A young lady");
     }
 
     #[test]
