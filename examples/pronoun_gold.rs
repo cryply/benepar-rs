@@ -11,7 +11,13 @@
 // an "it" that stands for nothing, CLAUSE for one that stands for a
 // statement) and resolver is what src/mentions.rs picked. The file is
 // meant to be checked by hand, especially the lines where the two
-// disagree; the model's answer is a draft, not the truth.
+// disagree; the model's answer is a draft, not the truth. A sixth
+// column may hold "alt:<words>", a second acceptable answer. Lines
+// starting with "# alias:" list the names of one person or thing,
+// separated by " = ", so that "Dr. Roylott" and "my stepfather" count
+// as the same antecedent:
+//
+//   # alias: Dr. Grimesby Roylott = Dr. Roylott = my stepfather
 //
 //   cargo run --release --example pronoun_gold -- draft --model MODEL \
 //       --text story.txt --out story.pronouns.tsv
@@ -137,7 +143,8 @@ fn prompt(context: &str, word: &str) -> String {
 Answer with the exact words from the passage that name the person or thing, as short as a name or a noun phrase \
 (for example \"Dr. Roylott\", \"my sister\", \"the lamp\"). If the pronoun refers to a whole statement or event \
 rather than to a person or thing, answer CLAUSE. If it refers to nothing (as in \"it is clear that\", \
-\"it was late\"), answer NONE. Give only the answer, no explanation.\n\n{context}\nMarked pronoun: {word}"
+\"it was late\"), answer NONE. Never answer with a pronoun: name the person or thing. \
+Give only the answer, no explanation.\n\n{context}\nMarked pronoun: {word}"
     )
 }
 
@@ -188,9 +195,24 @@ fn matches(gold: &str, pick: &str) -> bool {
     }
 }
 
+// The alias group a text belongs to, if any: the group's first name.
+fn canonical<'a>(aliases: &'a [Vec<String>], text: &str) -> Option<&'a str> {
+    let t = text.trim().to_lowercase();
+    aliases.iter().find(|g| g.iter().any(|n| *n == t)).map(|g| g[0].as_str())
+}
+
 fn score(a: Score) -> Result<()> {
     let doc = parse(&a.model_dir, &a.text, a.threads)?;
     let gold = std::fs::read_to_string(&a.gold)?;
+    let aliases: Vec<Vec<String>> = gold
+        .lines()
+        .filter_map(|l| l.strip_prefix("# alias:"))
+        .map(|l| l.split(" = ").map(|n| n.trim().to_lowercase()).collect())
+        .collect();
+    let same = |want: &str, pick: &str| match (canonical(&aliases, want), canonical(&aliases, pick)) {
+        (Some(x), Some(y)) => x == y,
+        _ => matches(want, pick),
+    };
     let mut by_word: std::collections::BTreeMap<String, (usize, usize)> = std::collections::BTreeMap::new();
     let (mut total, mut hit) = (0, 0);
     for line in gold.lines().skip(1) {
@@ -202,10 +224,12 @@ fn score(a: Score) -> Result<()> {
         let m = doc.all.iter().find(|m| m.kind == Kind::Pronoun && m.sentence == si && m.start == wi);
         let pick = m.and_then(|m| m.candidates.first()).map(|c| c.text.as_str()).unwrap_or("");
         let want = f[3];
-        let ok = match want {
+        let alt = f.get(5).and_then(|n| n.strip_prefix("alt:"));
+        let accept = |w: &str| match w {
             "NONE" | "CLAUSE" => m.is_none() || pick.is_empty(),
-            _ => matches(want, pick),
+            _ => same(w, pick),
         };
+        let ok = accept(want) || alt.is_some_and(accept);
         total += 1;
         hit += ok as usize;
         let e = by_word.entry(f[2].to_lowercase()).or_insert((0, 0));
