@@ -62,6 +62,9 @@ pub struct Mention {
     // place, enough once it repeats
     #[serde(skip)]
     pub(crate) motion: bool,
+    // object of any preposition ("in a fit", "at any rate")
+    #[serde(skip)]
+    pub(crate) oblique: bool,
     // for pronouns: ranked antecedent candidates, best first
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub candidates: Vec<Candidate>,
@@ -197,7 +200,7 @@ fn is_possessor(t: &Node) -> bool {
 // Mentions of one sentence. `sentence` is its index in the document.
 pub fn mentions(tree: &Node, sentence: usize) -> Vec<Mention> {
     let mut out = Vec::new();
-    walk(tree, 0, sentence, false, false, false, false, &mut out);
+    walk(tree, 0, sentence, false, false, false, false, false, &mut out);
     out.sort_by_key(|m| (m.start, std::cmp::Reverse(m.end)));
     out
 }
@@ -232,13 +235,50 @@ fn has_clause_complement(kids: &[Node]) -> bool {
 
 // "It is my belief that...", "it became clear to me that...": the subject
 // "it" stands for the clause that follows, not for anything before it.
-fn expletive_it(kids: &[Node]) -> bool {
+fn subject_is_it(kids: &[Node]) -> bool {
     let subject = kids.iter().find(|k| top_label(k) == "NP");
-    let is_it = matches!(subject, Some(Node::Phrase(_, nk)) if nk.len() == 1 && matches!(&nk[0], Node::Leaf(t, w) if t == "PRP" && w.eq_ignore_ascii_case("it")));
-    is_it && has_clause_complement(kids)
+    matches!(subject, Some(Node::Phrase(_, nk)) if nk.len() == 1 && matches!(&nk[0], Node::Leaf(t, w) if t == "PRP" && w.eq_ignore_ascii_case("it")))
 }
 
-fn walk(t: &Node, start: usize, sentence: usize, subject: bool, locative: bool, motion: bool, speaker: bool, out: &mut Vec<Mention>) {
+fn expletive_it(kids: &[Node]) -> bool {
+    subject_is_it(kids) && has_clause_complement(kids)
+}
+
+// "it was late", "it is a little cold", "it was a wild night", "as
+// soon as it was daylight": the "it" of time and weather. The clause's
+// verb phrase is a copula whose predicate is a time noun or a weather
+// or daylight word.
+const WEATHER_WORDS: &[&str] = &[
+    "cold", "warm", "hot", "dark", "light", "late", "early", "daylight", "dusk", "dawn", "o'clock", "noon", "midnight", "wet", "dry",
+    "windy", "foggy", "sunny", "rainy", "chilly", "bright", "gloomy", "weather",
+];
+
+fn weather_it(kids: &[Node]) -> bool {
+    let Some(Node::Phrase(_, vk)) = kids.iter().find(|k| top_label(k) == "VP") else { return false };
+    let copula = matches!(vk.first(), Some(Node::Leaf(t, w)) if t.starts_with("VB") && matches!(w.to_lowercase().as_str(), "is" | "was" | "be" | "been" | "being" | "'s" | "seems" | "seemed" | "grew" | "grows" | "got" | "gets"));
+    if !copula {
+        return false;
+    }
+    let mut lv = Vec::new();
+    for k in &vk[1..] {
+        if matches!(top_label(k), "NP" | "ADJP" | "ADVP") {
+            leaves(k, &mut lv);
+        }
+    }
+    lv.iter().any(|l| {
+        let w = l.word.to_lowercase();
+        WEATHER_WORDS.contains(&w.as_str()) || (l.tag.starts_with("NN") && crate::skeleton::TIME_WORDS.contains(&w.as_str())) || l.tag == "CD"
+    })
+}
+
+// "it seems", "it appears", "as it happens", "it turned out": the subject
+// is a placeholder for whatever follows.
+fn raising_it(kids: &[Node]) -> bool {
+    let Some(Node::Phrase(_, vk)) = kids.iter().find(|k| top_label(k) == "VP") else { return false };
+    matches!(vk.first(), Some(Node::Leaf(t, w)) if t.starts_with("VB") && matches!(w.to_lowercase().as_str(), "seems" | "seemed" | "seem" | "appears" | "appeared" | "appear" | "happens" | "happened" | "happen" | "turns" | "turned" | "follows" | "matters" | "mattered"))
+}
+
+fn walk(t: &Node, start: usize, sentence: usize, subject: bool, locative: bool, motion: bool, oblique: bool, speaker: bool, out: &mut Vec<Mention>) {
     let kids = match t {
         Node::Leaf(..) => return,
         Node::Phrase(_, kids) => kids,
@@ -247,7 +287,7 @@ fn walk(t: &Node, start: usize, sentence: usize, subject: bool, locative: bool, 
     let is_np = label == "NP" || label == "WHNP" || label == "NML";
     let is_clause = matches!(label, "S" | "SINV" | "SQ" | "SBAR" | "" | "TOP");
     let is_speech = is_clause && speech_clause(kids);
-    let skip_it = is_clause && expletive_it(kids);
+    let skip_it = is_clause && (expletive_it(kids) || (subject_is_it(kids) && (weather_it(kids) || raising_it(kids))));
     // the NP right after a preposition of place
     let place_pp = label == "PP"
         && matches!(kids.first(), Some(Node::Leaf(t, w)) if (t == "IN" || t == "TO") && PLACE_PREPOSITIONS.contains(&w.to_lowercase().as_str()));
@@ -264,6 +304,7 @@ fn walk(t: &Node, start: usize, sentence: usize, subject: bool, locative: bool, 
             if let Some(mut m) = base_np(t, start, sentence, subject) {
                 m.locative = locative;
                 m.motion = motion;
+                m.oblique = oblique;
                 m.possessor = is_possessor(t);
                 m.speaker = speaker;
                 out.push(m);
@@ -320,7 +361,8 @@ fn walk(t: &Node, start: usize, sentence: usize, subject: bool, locative: bool, 
                 // continues with PPs of its own ("the city of Munich")
                 let child_locative = (place_pp && i == 1 && matches!(top_label(k), "NP")) || (locative && is_np && matches!(top_label(k), "NP" | "NML"));
                 let child_motion = (motion_pp && i == 1 && matches!(top_label(k), "NP")) || (motion && is_np && matches!(top_label(k), "NP" | "NML"));
-                walk(k, pos, sentence, child_subject, child_locative, child_motion, child_subject && is_speech, out);
+                let child_oblique = (label == "PP" && i >= 1 && matches!(top_label(k), "NP")) || (oblique && is_np && matches!(top_label(k), "NP" | "NML"));
+                walk(k, pos, sentence, child_subject, child_locative, child_motion, child_oblique, child_subject && is_speech, out);
             }
             _ => {}
         }
@@ -347,6 +389,7 @@ fn name_mention(words: &[(&str, &str)], start: usize, sentence: usize, subject: 
         possessor: false,
         speaker: false,
         motion: false,
+        oblique: false,
         candidates: Vec::new(),
     }
 }
@@ -374,6 +417,7 @@ fn pronoun(word: &str, tag: &str, pos: usize, sentence: usize, subject: bool) ->
         possessor: false,
         speaker: false,
         motion: false,
+        oblique: false,
         candidates: Vec::new(),
     }
 }
@@ -438,6 +482,7 @@ fn base_np(t: &Node, start: usize, sentence: usize, subject: bool) -> Option<Men
         possessor: false,
         speaker: false,
         motion: false,
+        oblique: false,
         candidates: Vec::new(),
     })
 }
@@ -484,6 +529,9 @@ pub(crate) fn is_person_noun(head: &str) -> bool {
 const RECENCY_WEIGHT: f32 = 0.5;
 // "Smith's room": the possessor is said in passing
 const POSSESSOR_PENALTY: f32 = 0.5;
+// "in a fit", "with a sudden effort": a thing after a preposition is
+// rarely what the next "it" is about
+const OBLIQUE_PENALTY: f32 = 0.5;
 // "Holmes answered": the speaker is who the next sentence is about
 const SPEAKER_BONUS: f32 = 0.5;
 // "A young lady has arrived. She...": a person just introduced by an
@@ -583,12 +631,17 @@ pub fn resolve(all: &mut [Mention]) {
                         continue;
                     }
                 }
-                // nor a person by description ("the woman", "my dear fellow")
+                // nor a person by description ("the woman", "my dear fellow"),
+                // nor a time ("the morning", "some time")
                 (false, Kind::Nominal) => {
-                    if is_person_noun(&c.head) {
+                    if is_person_noun(&c.head) || crate::skeleton::TIME_WORDS.contains(&c.head.to_lowercase().as_str()) {
                         continue;
                     }
                     score += 1.5;
+                    // "in a fit", "at any rate": said in passing
+                    if c.oblique {
+                        score -= OBLIQUE_PENALTY;
+                    }
                 }
                 _ => {}
             }
@@ -833,7 +886,7 @@ mod tests {
     fn pronouns_get_ranked_candidates() {
         let all = doc(&[
             "(S (NP (NNP Alice)) (VP (VBD told) (NP (NNP Bob)) (SBAR (IN that) (S (NP (PRP she)) (VP (MD would) (VP (VB call) (NP (PRP him))))))) (. .))",
-            "(S (NP (PRP It)) (VP (VBD was) (ADJP (JJ late))) (. .))",
+            "(S (NP (PRP It)) (VP (VBD was) (ADJP (JJ broken))) (. .))",
         ]);
         let she = all.iter().find(|m| m.text == "she").unwrap();
         assert_eq!(she.candidates[0].text, "Alice");
@@ -1040,8 +1093,17 @@ mod tests {
     fn expletive_it_is_not_a_mention() {
         let all = doc(&["(S (NP (PRP It)) (VP (VBD was) (NP (PRP$ his) (NN custom)) (S (VP (TO to) (VP (VB smoke))))) (. .))"]);
         assert!(all.iter().all(|m| m.text != "It"));
-        let all = doc(&["(S (NP (PRP It)) (VP (VBD was) (ADJP (JJ late))) (. .))"]);
+        let all = doc(&["(S (NP (PRP It)) (VP (VBD was) (ADJP (JJ broken))) (. .))"]);
         assert!(all.iter().any(|m| m.text == "It"));
+        // time, weather and raising verbs: no mention either
+        for t in [
+            "(S (NP (PRP It)) (VP (VBD was) (ADJP (JJ late))) (. .))",
+            "(S (NP (PRP It)) (VP (VBD was) (NP (DT a) (JJ wild) (NN night))) (. .))",
+            "(S (NP (PRP It)) (VP (VBD was) (NP (CD seven) (NN o'clock))) (. .))",
+            "(S (NP (PRP It)) (VP (VBZ seems) (ADJP (JJ right))) (. .))",
+        ] {
+            assert!(doc(&[t]).iter().all(|m| m.text != "It"), "{t}");
+        }
     }
 
     #[test]

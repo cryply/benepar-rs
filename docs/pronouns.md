@@ -144,9 +144,11 @@ They are scored low and win only when no neuter NP fits, see 4.3.
 clause complement: an S or SBAR child of the clause itself, of its VP, or
 of an ADJP in its VP. This covers "it is my belief that...", "it was his
 custom to smoke", "it became clear to me that...", "made it impossible
-for me to tell", "it seems that...". Weather and time "it" ("it was
-late", "it rained") are not recognised; they fall through to normal
-resolution and usually find nothing neuter nearby, which is tolerable.
+for me to tell", "it seems that...". Nor is it a pronoun when it is the
+subject of a copula whose predicate is a time noun, a number or a word
+of weather or daylight ("it was late", "it was a wild night", "it was
+seven o'clock", "it is a little cold"), or the subject of a raising verb
+("it seems", "it appears", "as it happens", "it turned out").
 
 ### 2.7 Direct speech
 
@@ -201,7 +203,8 @@ head noun of a description apposed to the name ("Smith, the widow"), and
 from earlier clear resolutions in the same text (section 7). Nominals get
 a gender from their head noun (widow, stepfather, girl, Mrs. ...).
 
-Animacy: he, she need animate or unknown; it needs inanimate or unknown.
+Animacy: he, she need animate or unknown; it needs inanimate or unknown,
+and never a time ("the morning", "some time").
 A name of a person is animate; a place is inanimate; a nominal is animate
 when its head is a person noun (man, doctor, friend, -er/-or/-ist
 agent nouns, kinship terms, titles) and inanimate when its head is a
@@ -236,7 +239,9 @@ and should be read as an ordering, not as calibrated probabilities.
 |---|---|
 | subject | +0.5 |
 | speaker of a quote (subject of a speech verb) | +0.5 more |
-| object, oblique | 0 |
+| object | 0 |
+| oblique, for a neuter pronoun | -0.5 |
+| oblique, for he/she | 0 |
 | possessor | -0.5 |
 | predicate, apposition | not a candidate |
 
@@ -333,10 +338,11 @@ and chains (5.2) use only clear resolutions.
   dialogue. Current: restricted 62.8, free 57.6.
 - Winograd schemas (273): commonsense cases, mostly out of reach for
   rules; used to make sure nothing silly happens.
-- Story sample: 50 bracketed pronouns from "The Speckled Band" judged by
-  hand, 27 correct before the place and expletive fixes. A proper gold
-  file for the story (every third person pronoun with its antecedent)
-  is the measurement this document needs and does not have yet.
+- Story gold: every third person pronoun of "The Speckled Band" (497)
+  with its antecedent, drafted by a chat model and scored by
+  examples/pronoun_gold.rs with alias groups for the characters. Current:
+  56.9% overall; his 73, he 67, she 59, her 50, it 39. The draft is not
+  yet checked by hand.
 
 ## 10. What the code does not do yet
 
@@ -356,4 +362,4 @@ and chains (5.2) use only clear resolutions.
 - animacy of nominals beyond person nouns (4.1): a person noun is
   excluded for "it", but "the lawn" is not excluded for "he" when
   nothing better is around, since there is no list of things yet
-- the story gold file (9)
+- hand checking of the story gold file (9)
