@@ -350,8 +350,7 @@ and chains (5.2) use only clear resolutions.
 - binding (4.2): only reflexives are handled
 - cataphora in fronted clauses (3)
 - new entity bonus (5.5) and parallelism (5.7)
-- animacy of nominals beyond person nouns (4.1): "the lawn" and "the
-  noose" are candidates for "it" on an equal footing with everything
-  else, which is right, but "the lawn" is also not excluded for "he"
-  when nothing better is around
+- animacy of nominals beyond person nouns (4.1): a person noun is
+  excluded for "it", but "the lawn" is not excluded for "he" when
+  nothing better is around, since there is no list of things yet
 - the story gold file (9)
