@@ -570,12 +570,19 @@ pub fn resolve(all: &mut [Mention]) {
                     _ => {}
                 },
                 // "it": a thing, not a person with a known gender
+                // "it": a thing, not a person with a known gender or a title
                 (false, Kind::Name) => {
-                    if have.is_some() {
+                    if have.is_some() || title_of(&c.text).is_some() {
                         continue;
                     }
                 }
-                (false, Kind::Nominal) => score += 1.5,
+                // nor a person by description ("the woman", "my dear fellow")
+                (false, Kind::Nominal) => {
+                    if is_person_noun(&c.head) {
+                        continue;
+                    }
+                    score += 1.5;
+                }
                 _ => {}
             }
             if c.subject {
@@ -852,7 +859,7 @@ mod tests {
         let report = ents.iter().find(|(k, _)| k == "the report").unwrap();
         assert_eq!(report.1, vec![0, 1]);
         let trees2 = [
-            "(S (NP (DT The) (NN engineer)) (VP (VBD read) (NP (DT the) (NN report))) (. .))",
+            "(S (NP (DT The) (NN table)) (VP (VBD held) (NP (DT the) (NN report))) (. .))",
             "(S (NP (PRP It)) (VP (VBD was) (ADJP (JJ long))) (. .))",
         ];
         let all2 = doc(&trees2);
@@ -865,7 +872,7 @@ mod tests {
             .map(|t| crate::treebank::leaves(&parse(t).unwrap()).into_iter().map(|(_, w)| w).collect())
             .collect();
         assert_eq!(annotate(&words2, &all2, 1.0, 1)[1], "It was long .");
-        assert_eq!(annotate(&words2, &all2, 1.0, 2)[1], "It [The engineer or the report] was long .");
+        assert_eq!(annotate(&words2, &all2, 1.0, 2)[1], "It [The table or the report] was long .");
     }
 
     #[test]
@@ -992,6 +999,20 @@ mod tests {
         ]);
         let she = all.iter().find(|m| m.text == "She").unwrap();
         assert_eq!(she.candidates[0].text, "Miss Roylott");
+    }
+
+    #[test]
+    fn it_is_never_a_person() {
+        let all = doc(&[
+            "(S (NP (DT The) (NN woman)) (VP (VBD saw) (NP (DT the) (NN lamp))) (. .))",
+            "(S (NP (PRP It)) (VP (VBD was) (NP (NN fear))) (. .))",
+            "(S (NP (NNP Dr.) (NNP Watson)) (VP (VBD took) (NP (DT the) (NN case))) (. .))",
+            "(S (NP (PRP It)) (VP (VBD was) (ADJP (JJ simple))) (. .))",
+        ]);
+        let its: Vec<&Mention> = all.iter().filter(|m| m.text == "It").collect();
+        assert_eq!(its[0].candidates[0].text, "the lamp");
+        assert!(its[0].candidates.iter().all(|c| c.text != "The woman"));
+        assert!(its[1].candidates.iter().all(|c| c.text != "Dr. Watson"));
     }
 
     #[test]
