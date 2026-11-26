@@ -349,7 +349,10 @@ and chains (5.2) use only clear resolutions.
   use of speech verbs
 - binding (4.2): only reflexives are handled
 - cataphora in fronted clauses (3)
-- new entity bonus (5.5) and parallelism (5.7)
+- parallelism (5.7)
+- pronoun chains (5.2): tried twice, once for names and once for every
+  antecedent; no gain on GAP and no visible gain on the story, so left
+  out until a gold file for the story can measure it
 - animacy of nominals beyond person nouns (4.1): a person noun is
   excluded for "it", but "the lawn" is not excluded for "he" when
   nothing better is around, since there is no list of things yet
