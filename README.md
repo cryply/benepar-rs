@@ -73,7 +73,11 @@ names mentioned several times (what the text is about) and for mentions
 close to the pronoun; a possessor ("Smith's room") counts for less and
 the subject of a verb of speaking ("Holmes answered") for more; a name
 after a preposition of place ("in Evanston") is not a person unless its
-gender is known; forms of one name ("Smith",
+gender is known, and a name seen once after such a preposition, or twice
+after to/from, and never with a title or a gender, is a place everywhere
+in the text ("Stoke Moran", "Leatherhead"); the "it" of "it is my belief
+that..." and "it was his custom to..." stands for no one and gets no
+antecedent; forms of one name ("Smith",
 "Alice Smith") are one candidate and share a gender, but a different title
 ("Miss Roylott" after "Dr. Roylott") or a known different gender makes
 two people; reflexives bind in their own sentence. `--mentions`
