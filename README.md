@@ -65,7 +65,9 @@ Alice sent Bob the report .
 He [Bob] read it [the report] and told her [Alice] that it [the report] was too long .
 ```
 
-The rules: number agreement; names for he/she, descriptions for it;
+The full specification of the resolver, with what the current code
+leaves out, is in [docs/pronouns.md](docs/pronouns.md). In short, the
+rules: number agreement; names for he/she, descriptions for it;
 gender from a small list of common first names, from the noun of a
 description ("the widow", "my stepfather"), plus whatever earlier
 pronouns in the same text clearly implied; a preference for subjects, for
