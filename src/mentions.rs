@@ -58,6 +58,10 @@ pub struct Mention {
     // subject of a verb of speaking ("Holmes" in "Holmes answered")
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub speaker: bool,
+    // after "to" or "from" ("drove to Leatherhead"): weak evidence of a
+    // place, enough once it repeats
+    #[serde(skip)]
+    pub(crate) motion: bool,
     // for pronouns: ranked antecedent candidates, best first
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub candidates: Vec<Candidate>,
@@ -193,7 +197,7 @@ fn is_possessor(t: &Node) -> bool {
 // Mentions of one sentence. `sentence` is its index in the document.
 pub fn mentions(tree: &Node, sentence: usize) -> Vec<Mention> {
     let mut out = Vec::new();
-    walk(tree, 0, sentence, false, false, false, &mut out);
+    walk(tree, 0, sentence, false, false, false, false, &mut out);
     out.sort_by_key(|m| (m.start, std::cmp::Reverse(m.end)));
     out
 }
@@ -216,7 +220,25 @@ fn speech_clause(kids: &[Node]) -> bool {
     })
 }
 
-fn walk(t: &Node, start: usize, sentence: usize, subject: bool, locative: bool, speaker: bool, out: &mut Vec<Mention>) {
+// A clause complement right in the clause, in its verb phrase or in its
+// adjective phrase: the S in "it was his custom to smoke", the SBAR in
+// "it is my belief that..." and in "made it impossible for me to tell".
+fn has_clause_complement(kids: &[Node]) -> bool {
+    kids.iter().any(|k| {
+        matches!(top_label(k), "S" | "SBAR")
+            || (matches!(top_label(k), "VP" | "ADJP") && matches!(k, Node::Phrase(_, vk) if has_clause_complement(vk)))
+    })
+}
+
+// "It is my belief that...", "it became clear to me that...": the subject
+// "it" stands for the clause that follows, not for anything before it.
+fn expletive_it(kids: &[Node]) -> bool {
+    let subject = kids.iter().find(|k| top_label(k) == "NP");
+    let is_it = matches!(subject, Some(Node::Phrase(_, nk)) if nk.len() == 1 && matches!(&nk[0], Node::Leaf(t, w) if t == "PRP" && w.eq_ignore_ascii_case("it")));
+    is_it && has_clause_complement(kids)
+}
+
+fn walk(t: &Node, start: usize, sentence: usize, subject: bool, locative: bool, motion: bool, speaker: bool, out: &mut Vec<Mention>) {
     let kids = match t {
         Node::Leaf(..) => return,
         Node::Phrase(_, kids) => kids,
@@ -225,9 +247,11 @@ fn walk(t: &Node, start: usize, sentence: usize, subject: bool, locative: bool, 
     let is_np = label == "NP" || label == "WHNP" || label == "NML";
     let is_clause = matches!(label, "S" | "SINV" | "SQ" | "SBAR" | "" | "TOP");
     let is_speech = is_clause && speech_clause(kids);
+    let skip_it = is_clause && expletive_it(kids);
     // the NP right after a preposition of place
     let place_pp = label == "PP"
         && matches!(kids.first(), Some(Node::Leaf(t, w)) if (t == "IN" || t == "TO") && PLACE_PREPOSITIONS.contains(&w.to_lowercase().as_str()));
+    let motion_pp = label == "PP" && matches!(kids.first(), Some(Node::Leaf(t, w)) if (t == "IN" || t == "TO") && matches!(w.to_lowercase().as_str(), "to" | "from"));
 
     if is_np {
         // A base NP contains no NP of its own (PPs and clauses attached
@@ -239,6 +263,7 @@ fn walk(t: &Node, start: usize, sentence: usize, subject: bool, locative: bool, 
         if !has_np_child {
             if let Some(mut m) = base_np(t, start, sentence, subject) {
                 m.locative = locative;
+                m.motion = motion;
                 m.possessor = is_possessor(t);
                 m.speaker = speaker;
                 out.push(m);
@@ -286,10 +311,16 @@ fn walk(t: &Node, start: usize, sentence: usize, subject: bool, locative: bool, 
             Node::Phrase(..) => {
                 // the first NP directly under a clause is its subject
                 let child_subject = is_clause && matches!(top_label(k), "NP") && !kids[..i].iter().any(|p| top_label(p) == "NP");
+                if child_subject && skip_it {
+                    pos += n;
+                    i += 1;
+                    continue;
+                }
                 // the object of a place PP, and the head NP of an NP that
                 // continues with PPs of its own ("the city of Munich")
                 let child_locative = (place_pp && i == 1 && matches!(top_label(k), "NP")) || (locative && is_np && matches!(top_label(k), "NP" | "NML"));
-                walk(k, pos, sentence, child_subject, child_locative, child_subject && is_speech, out);
+                let child_motion = (motion_pp && i == 1 && matches!(top_label(k), "NP")) || (motion && is_np && matches!(top_label(k), "NP" | "NML"));
+                walk(k, pos, sentence, child_subject, child_locative, child_motion, child_subject && is_speech, out);
             }
             _ => {}
         }
@@ -315,6 +346,7 @@ fn name_mention(words: &[(&str, &str)], start: usize, sentence: usize, subject: 
         locative: false,
         possessor: false,
         speaker: false,
+        motion: false,
         candidates: Vec::new(),
     }
 }
@@ -341,6 +373,7 @@ fn pronoun(word: &str, tag: &str, pos: usize, sentence: usize, subject: bool) ->
         locative: false,
         possessor: false,
         speaker: false,
+        motion: false,
         candidates: Vec::new(),
     }
 }
@@ -404,6 +437,7 @@ fn base_np(t: &Node, start: usize, sentence: usize, subject: bool) -> Option<Men
         locative: false,
         possessor: false,
         speaker: false,
+        motion: false,
         candidates: Vec::new(),
     })
 }
@@ -465,6 +499,20 @@ pub fn resolve(all: &mut [Mention]) {
             }
         }
     }
+    // names that are places everywhere in the text: once after a
+    // preposition of place, or twice after to/from, and never with a
+    // title or a gender ("Stoke Moran", "Leatherhead")
+    let mut places: Vec<String> = Vec::new();
+    for c in &snapshot {
+        if c.kind != Kind::Name || !(c.locative || c.motion) || places.iter().any(|p| same_name(p, &c.text)) {
+            continue;
+        }
+        let gendered = snapshot.iter().any(|o| o.kind == Kind::Name && same_name(&o.text, &c.text) && (title_of(&o.text).is_some() || gender_of_name(&o.text).is_some()));
+        let motions = snapshot.iter().filter(|o| o.kind == Kind::Name && o.motion && same_name(&o.text, &c.text)).count();
+        if !gendered && (c.locative || motions >= 2) {
+            places.push(c.text.clone());
+        }
+    }
     // what each pronoun word last referred to, per sentence: a repeated
     // "it" in one sentence usually keeps its referent
     let mut last_in_sentence: Vec<(usize, String, String)> = Vec::new();
@@ -509,7 +557,7 @@ pub fn resolve(all: &mut [Mention]) {
                         (Some(w), Some(h)) if w == h => score += 2.0,
                         (Some(_), Some(_)) => continue,
                         // "in Evanston": a place unless we know otherwise
-                        _ if c.locative => continue,
+                        _ if c.locative || places.iter().any(|p| same_name(p, &c.text)) => continue,
                         _ => {}
                     }
                 }
@@ -578,7 +626,10 @@ pub fn resolve(all: &mut [Mention]) {
         let clear = cands.len() == 1 || cands.len() >= 2 && cands[0].score - cands[1].score >= LEARN_MARGIN;
         if let (Some(w), Some(best), true) = (want, cands.first(), clear) {
             let key = best.text.to_lowercase();
-            if !known.iter().any(|(k, _, _)| *k == key) && snapshot.iter().any(|c| c.kind == Kind::Name && c.text.to_lowercase() == key) {
+            if !known.iter().any(|(k, _, _)| *k == key)
+                && snapshot.iter().any(|c| c.kind == Kind::Name && c.text.to_lowercase() == key)
+                && !places.iter().any(|p| same_name(p, &best.text))
+            {
                 known.push((key, best.text.clone(), w));
             }
         }
@@ -941,6 +992,27 @@ mod tests {
         ]);
         let she = all.iter().find(|m| m.text == "She").unwrap();
         assert_eq!(she.candidates[0].text, "Miss Roylott");
+    }
+
+    #[test]
+    fn expletive_it_is_not_a_mention() {
+        let all = doc(&["(S (NP (PRP It)) (VP (VBD was) (NP (PRP$ his) (NN custom)) (S (VP (TO to) (VP (VB smoke))))) (. .))"]);
+        assert!(all.iter().all(|m| m.text != "It"));
+        let all = doc(&["(S (NP (PRP It)) (VP (VBD was) (ADJP (JJ late))) (. .))"]);
+        assert!(all.iter().any(|m| m.text == "It"));
+    }
+
+    #[test]
+    fn a_place_once_is_a_place_everywhere() {
+        let all = doc(&[
+            "(S (NP (PRP We)) (VP (VBD drove) (PP (TO to) (NP (NNP Leatherhead)))) (. .))",
+            "(S (NP (PRP We)) (VP (VBD came) (PP (IN from) (NP (NNP Leatherhead)))) (. .))",
+            "(S (NP (PRP$ My) (NN companion)) (VP (VBD sat) (ADVP (RB silent))) (. .))",
+            "(S (NP (NNP Leatherhead)) (VP (VBD was) (ADJP (JJ quiet))) (. .))",
+            "(S (NP (PRP He)) (VP (VBD started)) (. .))",
+        ]);
+        let he = all.iter().find(|m| m.text == "He").unwrap();
+        assert_eq!(he.candidates[0].text, "My companion");
     }
 
     #[test]
