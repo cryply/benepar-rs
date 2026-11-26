@@ -129,7 +129,7 @@ fn links_adjp(w: &str) -> bool {
     links_np(w) || matches!(stem(w).as_str(), "feel" | "felt" | "look" | "sound" | "turn" | "prov" | "prove" | "grow" | "grew" | "grown" | "get" | "got" | "gotten" | "smell" | "taste")
 }
 
-const TIME_WORDS: &[&str] = &[
+pub(crate) const TIME_WORDS: &[&str] = &[
     "yesterday", "today", "tomorrow", "tonight", "now", "then", "year", "years", "month", "months", "week", "weeks", "day", "days",
     "hour", "hours", "minute", "minutes", "night", "nights", "morning", "evening", "afternoon", "quarter", "decade", "decades", "century",
     "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday", "january", "february", "march", "april", "may", "june",
