@@ -160,6 +160,9 @@ keeps the state and only a closing tag ends it. The speaker of a quote is
 the subject of a speech verb (said, answered, asked, cried, remarked,
 replied, continued, ...) in one of the quote's sentences, outside the
 marks: "..." said Holmes; Holmes said "..."; "...," he answered, "...".
+When that subject is a pronoun ("said he"), the speaker is the pronoun's
+antecedent: resolution runs twice, and the second pass builds the speech
+structure from the pronouns resolved in the first.
 A quote with no such subject takes the speaker who spoke before the last
 speaker (two people talking in turns), and otherwise has no known
 speaker. The addressees are the other speakers of the last few quotes.
@@ -356,8 +359,7 @@ and chains (5.2) use only clear resolutions.
 - clause antecedents for it (2.5)
 - direct speech (2.7, 6): quotes, speakers and addressees are tracked
   and the speaker and addressees are excluded inside a quote; what
-  remains is first and second person (skipped everywhere) and
-  attribution by pronoun ("said he"), which does not name a speaker
+  remains is first and second person (skipped everywhere)
 - binding (4.2): only reflexives are handled
 - cataphora in fronted clauses (3)
 - parallelism (5.7)
