@@ -110,7 +110,8 @@ Role comes from the position of the mention under the nearest clause:
 
 A predicate or apposition NP is not an antecedent of its own; it is a
 description of the subject (or of the NP it is apposed to) and is
-recorded as such.
+recorded as such. The exception is "it": "It was the band" may well be
+what the next "it" is about.
 
 ### 2.3 Place
 
@@ -152,14 +153,16 @@ seven o'clock", "it is a little cold"), or the subject of a raising verb
 
 ### 2.7 Direct speech
 
-A quoted span is the text between a pair of quote tags (`` `` `` and
-`''`, or straight quotes). The speaker of a quote is the subject of the
-speech verb (said, answered, asked, cried, remarked, replied, continued,
-...) in the clause the quote is attached to: "..." said Holmes; Holmes
-said "..."; "...," he answered, "...". A quote with no attribution takes
-the speaker from the previous quote by alternation when exactly two
-people have spoken in the last few turns, and otherwise has no known
-speaker. The addressee is the other participant when known.
+A quoted span is the text between an opening quote tag (`` `` ``) and
+the next closing one (`''`); a paragraph that carries on the same speech
+opens a quote again without closing the previous one, so an opening tag
+keeps the state and only a closing tag ends it. The speaker of a quote is
+the subject of a speech verb (said, answered, asked, cried, remarked,
+replied, continued, ...) in one of the quote's sentences, outside the
+marks: "..." said Holmes; Holmes said "..."; "...," he answered, "...".
+A quote with no such subject takes the speaker who spoke before the last
+speaker (two people talking in turns), and otherwise has no known
+speaker. The addressees are the other speakers of the last few quotes.
 
 Inside a quote, "I/me/my" refers to the speaker, "you/your" to the
 addressee, "we" to the speaker plus others. Outside quotes, first and
@@ -203,8 +206,11 @@ head noun of a description apposed to the name ("Smith, the widow"), and
 from earlier clear resolutions in the same text (section 7). Nominals get
 a gender from their head noun (widow, stepfather, girl, Mrs. ...).
 
-Animacy: he, she need animate or unknown; it needs inanimate or unknown,
-and never a time ("the morning", "some time").
+Animacy: he, she need animate: a name, or a description whose head is a
+person noun ("the doctor", "my stepfather", agent nouns in -er/-or/-ist,
+kinship terms); "her injured wrist" and "some important business" are
+not candidates for he. it needs inanimate or unknown, and never a time
+("the morning", "some time"). they takes either.
 A name of a person is animate; a place is inanimate; a nominal is animate
 when its head is a person noun (man, doctor, friend, -er/-or/-ist
 agent nouns, kinship terms, titles) and inanimate when its head is a
@@ -302,10 +308,8 @@ preference: mentions inside the same quote, mentions in the narration
 right before the quote, mentions in earlier quotes by the same speaker.
 Mentions inside other speakers' quotes are candidates with -0.5.
 
-The speaker of the quote is never a candidate for a third person pronoun
-inside that quote ("I" covers that), and the addressee is not a
-candidate for he/she inside the quote either when the addressee is
-known.
+The speaker of the quote is never a candidate for a he/she inside that
+quote ("I" covers that), and neither are the addressees ("you").
 
 ## 7. Names and gender learning
 
@@ -341,7 +345,7 @@ and chains (5.2) use only clear resolutions.
 - Story gold: every third person pronoun of "The Speckled Band" (497)
   with its antecedent, drafted by a chat model and scored by
   examples/pronoun_gold.rs with alias groups for the characters. Current:
-  56.9% overall; his 73, he 67, she 59, her 50, it 39. The draft is not
+  61.0% overall; his 83, he 80, she 61, her 50, it 38. The draft is not
   yet checked by hand.
 
 ## 10. What the code does not do yet
@@ -350,9 +354,10 @@ and chains (5.2) use only clear resolutions.
 - singular they (1.1): "they" is plural only
 - relative pronouns (2.4)
 - clause antecedents for it (2.5)
-- direct speech (2.7, 6): quotes are not detected; first and second
-  person are skipped everywhere; the speaker bonus (5.1) is the only
-  use of speech verbs
+- direct speech (2.7, 6): quotes, speakers and addressees are tracked
+  and the speaker and addressees are excluded inside a quote; what
+  remains is first and second person (skipped everywhere) and
+  attribution by pronoun ("said he"), which does not name a speaker
 - binding (4.2): only reflexives are handled
 - cataphora in fronted clauses (3)
 - parallelism (5.7)
