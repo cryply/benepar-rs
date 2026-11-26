@@ -65,6 +65,17 @@ pub struct Mention {
     // object of any preposition ("in a fit", "at any rate")
     #[serde(skip)]
     pub(crate) oblique: bool,
+    // after a copula ("a hard man" in "he is a hard man"): a description
+    // of the subject, not a thing of its own
+    #[serde(skip)]
+    pub(crate) predicate: bool,
+    // the last quote mark before the mention in its sentence, and the
+    // last one in the whole sentence (0 none, 1 opening, 2 closing):
+    // direct speech is tracked from these across sentences
+    #[serde(skip)]
+    pub(crate) mark_before: u8,
+    #[serde(skip)]
+    pub(crate) last_mark: u8,
     // for pronouns: ranked antecedent candidates, best first
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub candidates: Vec<Candidate>,
@@ -200,8 +211,17 @@ fn is_possessor(t: &Node) -> bool {
 // Mentions of one sentence. `sentence` is its index in the document.
 pub fn mentions(tree: &Node, sentence: usize) -> Vec<Mention> {
     let mut out = Vec::new();
-    walk(tree, 0, sentence, false, false, false, false, false, &mut out);
+    walk(tree, 0, sentence, false, false, false, false, false, false, &mut out);
     out.sort_by_key(|m| (m.start, std::cmp::Reverse(m.end)));
+    // quote marks as the treebank tags them: `` opens, '' closes
+    let mut lv = Vec::new();
+    leaves(tree, &mut lv);
+    let marks: Vec<u8> = lv.iter().map(|l| if l.tag == "``" { 1 } else if l.tag == "''" { 2 } else { 0 }).collect();
+    let last = marks.iter().rev().find(|m| **m != 0).copied().unwrap_or(0);
+    for m in &mut out {
+        m.mark_before = marks[..m.start.min(marks.len())].iter().rev().find(|m| **m != 0).copied().unwrap_or(0);
+        m.last_mark = last;
+    }
     out
 }
 
@@ -278,7 +298,9 @@ fn raising_it(kids: &[Node]) -> bool {
     matches!(vk.first(), Some(Node::Leaf(t, w)) if t.starts_with("VB") && matches!(w.to_lowercase().as_str(), "seems" | "seemed" | "seem" | "appears" | "appeared" | "appear" | "happens" | "happened" | "happen" | "turns" | "turned" | "follows" | "matters" | "mattered"))
 }
 
-fn walk(t: &Node, start: usize, sentence: usize, subject: bool, locative: bool, motion: bool, oblique: bool, speaker: bool, out: &mut Vec<Mention>) {
+const COPULAS: &[&str] = &["is", "was", "are", "were", "be", "been", "being", "am", "'s", "'re", "'m", "seems", "seemed", "seem", "became", "become", "becomes", "remains", "remained", "remain"];
+
+fn walk(t: &Node, start: usize, sentence: usize, subject: bool, locative: bool, motion: bool, oblique: bool, predicate: bool, speaker: bool, out: &mut Vec<Mention>) {
     let kids = match t {
         Node::Leaf(..) => return,
         Node::Phrase(_, kids) => kids,
@@ -292,6 +314,8 @@ fn walk(t: &Node, start: usize, sentence: usize, subject: bool, locative: bool, 
     let place_pp = label == "PP"
         && matches!(kids.first(), Some(Node::Leaf(t, w)) if (t == "IN" || t == "TO") && PLACE_PREPOSITIONS.contains(&w.to_lowercase().as_str()));
     let motion_pp = label == "PP" && matches!(kids.first(), Some(Node::Leaf(t, w)) if (t == "IN" || t == "TO") && matches!(w.to_lowercase().as_str(), "to" | "from"));
+    // a VP headed by a copula: its NP is a predicate
+    let copula_vp = label == "VP" && matches!(kids.first(), Some(Node::Leaf(t, w)) if t.starts_with("VB") && COPULAS.contains(&w.to_lowercase().as_str()));
 
     if is_np {
         // A base NP contains no NP of its own (PPs and clauses attached
@@ -305,6 +329,7 @@ fn walk(t: &Node, start: usize, sentence: usize, subject: bool, locative: bool, 
                 m.locative = locative;
                 m.motion = motion;
                 m.oblique = oblique;
+                m.predicate = predicate;
                 m.possessor = is_possessor(t);
                 m.speaker = speaker;
                 out.push(m);
@@ -362,7 +387,8 @@ fn walk(t: &Node, start: usize, sentence: usize, subject: bool, locative: bool, 
                 let child_locative = (place_pp && i == 1 && matches!(top_label(k), "NP")) || (locative && is_np && matches!(top_label(k), "NP" | "NML"));
                 let child_motion = (motion_pp && i == 1 && matches!(top_label(k), "NP")) || (motion && is_np && matches!(top_label(k), "NP" | "NML"));
                 let child_oblique = (label == "PP" && i >= 1 && matches!(top_label(k), "NP")) || (oblique && is_np && matches!(top_label(k), "NP" | "NML"));
-                walk(k, pos, sentence, child_subject, child_locative, child_motion, child_oblique, child_subject && is_speech, out);
+                let child_predicate = (copula_vp && matches!(top_label(k), "NP")) || (predicate && is_np && matches!(top_label(k), "NP" | "NML"));
+                walk(k, pos, sentence, child_subject, child_locative, child_motion, child_oblique, child_predicate, child_subject && is_speech, out);
             }
             _ => {}
         }
@@ -390,6 +416,9 @@ fn name_mention(words: &[(&str, &str)], start: usize, sentence: usize, subject: 
         speaker: false,
         motion: false,
         oblique: false,
+        predicate: false,
+        mark_before: 0,
+        last_mark: 0,
         candidates: Vec::new(),
     }
 }
@@ -418,6 +447,9 @@ fn pronoun(word: &str, tag: &str, pos: usize, sentence: usize, subject: bool) ->
         speaker: false,
         motion: false,
         oblique: false,
+        predicate: false,
+        mark_before: 0,
+        last_mark: 0,
         candidates: Vec::new(),
     }
 }
@@ -483,6 +515,9 @@ fn base_np(t: &Node, start: usize, sentence: usize, subject: bool) -> Option<Men
         speaker: false,
         motion: false,
         oblique: false,
+        predicate: false,
+        mark_before: 0,
+        last_mark: 0,
         candidates: Vec::new(),
     })
 }
@@ -538,6 +573,131 @@ const SPEAKER_BONUS: f32 = 0.5;
 // indefinite subject is who the next sentence is about
 const NEW_ENTITY_BONUS: f32 = 3.0;
 
+// what someone else said: -0.5 for a candidate inside another
+// speaker's quote
+const OTHER_SPEAKER_PENALTY: f32 = 0.5;
+
+// The same person or thing, as far as two mentions can tell: names by
+// same_name, everything else by position.
+fn same_referent(a: &Mention, b: &Mention) -> bool {
+    if a.kind == Kind::Name && b.kind == Kind::Name {
+        same_name(&a.text, &b.text)
+    } else {
+        a.sentence == b.sentence && a.start == b.start && a.end == b.end
+    }
+}
+
+// Direct speech across the document: which positions are inside quote
+// marks, and who speaks each quote. A quote's speaker is the subject of a
+// verb of speaking in one of the quote's sentences, outside the marks
+// ("said the woman", "Holmes answered"). A quote with no such subject
+// takes the speaker who spoke before the last speaker, when two people
+// are talking in turns.
+struct Speech {
+    // parity of quote marks before each sentence
+    open_before: Vec<usize>,
+    // (sentence, speaker mention) for every quote with a speaker, in order
+    speakers: Vec<(usize, Mention)>,
+    // the quote's sentence range for every sentence inside a quote
+    quote_of: Vec<Option<(usize, usize)>>,
+}
+
+impl Speech {
+    fn new(all: &[Mention]) -> Speech {
+        let n = all.iter().map(|m| m.sentence + 1).max().unwrap_or(0);
+        let mut last = vec![0u8; n];
+        for m in all {
+            last[m.sentence] = m.last_mark;
+        }
+        // a paragraph that carries on the same speech opens a quote again
+        // without closing the last one, so an opening mark keeps the state
+        // and only a closing mark ends it
+        let mut open_before = vec![0usize; n + 1];
+        for s in 0..n {
+            open_before[s + 1] = match last[s] {
+                1 => 1,
+                2 => 0,
+                _ => open_before[s],
+            };
+        }
+        // sentence ranges of quotes: a sentence belongs to a quote when it
+        // has a mark or starts inside one
+        let mut quote_of = vec![None; n];
+        let mut s = 0;
+        while s < n {
+            if last[s] == 0 && open_before[s] == 0 {
+                s += 1;
+                continue;
+            }
+            let a = s;
+            let mut b = s;
+            while b + 1 < n && open_before[b + 1] == 1 {
+                b += 1;
+            }
+            for q in &mut quote_of[a..=b] {
+                *q = Some((a, b));
+            }
+            s = b + 1;
+        }
+        let mut speakers: Vec<(usize, Mention)> = Vec::new();
+        let mut seen: Vec<(usize, usize)> = Vec::new();
+        for s in 0..n {
+            let Some((a, b)) = quote_of[s] else { continue };
+            if seen.contains(&(a, b)) {
+                continue;
+            }
+            seen.push((a, b));
+            let inside = |m: &Mention| match m.mark_before {
+                1 => true,
+                2 => false,
+                _ => open_before[m.sentence] == 1,
+            };
+            let named = all.iter().find(|m| m.speaker && m.sentence >= a && m.sentence <= b && !inside(m) && m.kind != Kind::Pronoun);
+            let who = match named {
+                Some(m) => Some(m.clone()),
+                None => {
+                    // turns: the speaker before the last one
+                    let last = speakers.last().map(|(_, m)| m.clone());
+                    let before = speakers.iter().rev().find(|(_, m)| last.as_ref().is_none_or(|l| !same_referent(l, m))).map(|(_, m)| m.clone());
+                    match (last, before) {
+                        (Some(_), Some(b)) => Some(b),
+                        _ => None,
+                    }
+                }
+            };
+            if let Some(w) = who {
+                speakers.push((a, w));
+            }
+        }
+        Speech { open_before, speakers, quote_of }
+    }
+
+    fn inside(&self, m: &Mention) -> bool {
+        match m.mark_before {
+            1 => true,
+            2 => false,
+            _ => self.open_before.get(m.sentence).copied().unwrap_or(0) == 1,
+        }
+    }
+
+    // the speaker of the quote at this sentence, and the people spoken to:
+    // the other speakers of the last few quotes
+    fn parties(&self, sentence: usize) -> (Option<&Mention>, Vec<&Mention>) {
+        let Some((a, _)) = self.quote_of.get(sentence).copied().flatten() else { return (None, Vec::new()) };
+        let speaker = self.speakers.iter().find(|(s, _)| *s == a).map(|(_, m)| m);
+        let others = self
+            .speakers
+            .iter()
+            .rev()
+            .filter(|(s, _)| *s < a)
+            .take(4)
+            .map(|(_, m)| m)
+            .filter(|m| speaker.is_none_or(|sp| !same_referent(m, sp)))
+            .collect();
+        (speaker, others)
+    }
+}
+
 fn indefinite(text: &str) -> bool {
     matches!(text.split_whitespace().next().map(|w| w.to_lowercase()).as_deref(), Some("a" | "an" | "some" | "another"))
 }
@@ -568,6 +728,7 @@ pub fn resolve(all: &mut [Mention]) {
             places.push(c.text.clone());
         }
     }
+    let speech = Speech::new(&snapshot);
     // what each pronoun word last referred to, per sentence: a repeated
     // "it" in one sentence usually keeps its referent
     let mut last_in_sentence: Vec<(usize, String, String)> = Vec::new();
@@ -576,6 +737,9 @@ pub fn resolve(all: &mut [Mention]) {
             continue;
         }
         let p = m.head.as_str();
+        // inside direct speech, the speaker says "I" and the addressee
+        // "you": neither is a he or a she of that quote
+        let (speaker, addressees) = if speech.inside(m) { speech.parties(m.sentence) } else { (None, Vec::new()) };
         // first and second person refer to the speakers, not to the text
         if matches!(p, "i" | "me" | "my" | "mine" | "myself" | "you" | "your" | "yours" | "yourself" | "we" | "us" | "our" | "ours" | "ourselves") {
             continue;
@@ -583,9 +747,16 @@ pub fn resolve(all: &mut [Mention]) {
         let reflexive = p.ends_with("self") || p.ends_with("selves");
         let want = pronoun_gender(p);
         let animate = want.is_some();
+        // "they" is neither a he nor an it: people or things, unknown
+        let neuter = matches!(p, "it" | "its" | "itself");
         let mut cands: Vec<Candidate> = Vec::new();
         for (j, c) in snapshot.iter().enumerate() {
-            if j >= i || c.kind == Kind::Pronoun || c.conjunct {
+            // a predicate ("he is a hard man") describes someone, it is no
+            // one of its own; for "it" the thing described may well be it
+            if j >= i || c.kind == Kind::Pronoun || c.conjunct || (c.predicate && !neuter) {
+                continue;
+            }
+            if animate && (speaker.is_some_and(|s| same_referent(s, c)) || addressees.iter().any(|s| same_referent(s, c))) {
                 continue;
             }
             if reflexive && c.sentence != m.sentence {
@@ -618,28 +789,29 @@ pub fn resolve(all: &mut [Mention]) {
                 }
                 // "the widow", "my stepfather": a person whose gender the
                 // noun gives away; "the doctor": a person; "the time": not
+                // "her injured wrist", "some important business": not a he
                 (true, Kind::Nominal) => match (want, gender_of_noun(&c.head)) {
                     (Some(w), Some(h)) if w == h => score += 1.0,
                     (Some(_), Some(_)) => continue,
                     _ if is_person_noun(&c.head) => score += 0.5,
-                    _ => {}
+                    _ => continue,
                 },
                 // "it": a thing, not a person with a known gender
                 // "it": a thing, not a person with a known gender or a title
                 (false, Kind::Name) => {
-                    if have.is_some() || title_of(&c.text).is_some() {
+                    if neuter && (have.is_some() || title_of(&c.text).is_some()) {
                         continue;
                     }
                 }
                 // nor a person by description ("the woman", "my dear fellow"),
                 // nor a time ("the morning", "some time")
                 (false, Kind::Nominal) => {
-                    if is_person_noun(&c.head) || crate::skeleton::TIME_WORDS.contains(&c.head.to_lowercase().as_str()) {
+                    if neuter && (is_person_noun(&c.head) || crate::skeleton::TIME_WORDS.contains(&c.head.to_lowercase().as_str())) {
                         continue;
                     }
                     score += 1.5;
                     // "in a fit", "at any rate": said in passing
-                    if c.oblique {
+                    if c.oblique && neuter {
                         score -= OBLIQUE_PENALTY;
                     }
                 }
@@ -653,6 +825,10 @@ pub fn resolve(all: &mut [Mention]) {
             }
             if c.speaker {
                 score += SPEAKER_BONUS;
+            }
+            // what another speaker said is a weaker antecedent
+            if speech.inside(c) && speech.parties(c.sentence).0.is_some_and(|s| speaker.is_none_or(|t| !same_referent(s, t))) {
+                score -= OTHER_SPEAKER_PENALTY;
             }
             if animate && c.kind == Kind::Nominal && c.subject && c.sentence + 1 == m.sentence && indefinite(&c.text) && is_person_noun(&c.head) {
                 score += NEW_ENTITY_BONUS;
@@ -1062,6 +1238,20 @@ mod tests {
         ]);
         let she = all.iter().find(|m| m.text == "She").unwrap();
         assert_eq!(she.candidates[0].text, "Miss Roylott");
+    }
+
+    #[test]
+    fn the_speaker_is_not_a_he_of_her_own_quote() {
+        // Helen tells Holmes about her stepfather: "he" is not Holmes
+        let all = doc(&[
+            "(SINV (`` \") (S (VP (VB Pray) (VP (VB go) (PRT (RP on))))) (, ,) ('' \") (VP (VBD said)) (NP (NNP Holmes)) (. .))",
+            "(SINV (`` \") (S (NP (PRP$ My) (NN stepfather)) (VP (VBD returned))) (, ,) ('' \") (VP (VBD said)) (NP (DT the) (NN woman)) (. .))",
+            "(S (`` \") (NP (PRP He)) (VP (VBD shut) (NP (PRP himself)) (ADVP (RB up))) (. .))",
+            "(SINV (S (NP (PRP He)) (VP (VBD had) (NP (DT no) (NNS friends)))) (, ,) ('' \") (VP (VBD said)) (NP (NNP Helen)) (. .))",
+        ]);
+        for m in all.iter().filter(|m| m.text == "He") {
+            assert_eq!(m.candidates[0].text, "My stepfather", "{:?}", m.candidates);
+        }
     }
 
     #[test]
